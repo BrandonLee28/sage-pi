@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
+import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import {
   AssistantEntry,
   AgentDoc,
@@ -12,7 +13,9 @@ import {
   defineDoc,
   defineExtension,
   defineTask,
+  GenerationTask,
   Harness,
+  hook,
   section,
   type Conversation,
   type ConversationId,
@@ -37,6 +40,11 @@ import type { Config } from "./config.ts";
 
 export const context = BACKGROUND_CONTEXT;
 const USER_PROFILE_MAX_CHARS = 2000;
+const TELEGRAM_REWRITE = "Rewrite your last answer as a plain-text Telegram message. " +
+  "Keep the same facts, times, names, and useful details. Remove Markdown formatting and raw JSON; " +
+  "use short natural sentences or one plain line per schedule item. " +
+  "Do not add slang, an unsolicited offer, or a follow-up question. " +
+  "This is a wording correction only: do not repeat tools or actions, and do not invent file delivery.";
 const DeliveryIndex = defineDoc<{ tasks: Record<string, TaskId> }>({
   kind: "personal.deliveries",
   version: 1,
@@ -295,14 +303,7 @@ export async function openAssistant(
           readFile(join(workspace, "AGENTS.md"), "utf8"),
         ),
         section("telegram_reply_style", () => options.sendTelegram
-          ? "User-facing replies are delivered as Telegram texts. Write like you are texting the user: " +
-            "natural, warm, concise sentences in short paragraphs. Match their conversational tone without forcing slang. " +
-            "Use plain text, including for scheduled check-ins. Avoid Markdown headings, bold, tables, code fences, " +
-            "JSON, raw tool output, and internal agent details in chat. Use a short plain-text list only when it helps. " +
-            "Keep structured data, code, and long formatted reports in workspace files; give a brief conversational " +
-            "summary and the saved path in chat. Only say a file was sent or attached after a tool confirms delivery. " +
-            "If the user explicitly requests a particular format inline, follow that request. " +
-            "This changes user-facing wording only; preserve tool arguments and file contents in their required formats."
+          ? readFile(join(workspace, "TELEGRAM.md"), "utf8")
           : undefined),
         section("skills", async () => {
           const folders = await readdir(join(workspace, "skills"), {
@@ -325,6 +326,34 @@ export async function openAssistant(
           return `Read a relevant SKILL.md before using it. Skills are maintained by the user. Do not create, edit, or delete skills unless the user explicitly asks.\n${skills.join("\n")}`;
         }),
       ],
+      hooks: options.sendTelegram ? [hook(GenerationTask, {
+        beforeRequest: (request) => {
+          if (request.messages.findLast((message) => message.role === "user")?.content !== TELEGRAM_REWRITE) return;
+          // This request may only reword the completed answer; it cannot repeat an external action.
+          return { messages: [...request.messages, {
+            role: "system", content: "Reword the answer only. Tools are unavailable for this correction.",
+            toolsRemoved: getCurrentTools(request.messages).map(({ name }) => ({ name })), timestamp: Date.now(),
+          }] };
+        },
+        onYield: async (answer, api, callContext) => {
+          const text = answer.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+          let structured = false;
+          try { const value = JSON.parse(text); structured = value !== null && typeof value === "object"; }
+          catch { /* Ordinary conversation is not JSON. */ }
+          if (!structured && !/(?:\*\*[^*\n]+\*\*|```|^#{1,6} |\[[^\]\n]+\]\(https?:\/\/)/m.test(text)) return;
+          const conversation = await harness.conversation(api.conversationId, callContext);
+          if (!conversation) throw new Error("Missing conversation for Telegram style correction");
+          const messages = (await conversation.context(callContext)).messages;
+          const user = messages.findLast((message) => message.role === "user");
+          const request = user?.role === "user" ? (typeof user.content === "string" ? user.content
+            : user.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n")) : "";
+          // The native continuation starts a new generation task, so task-local memos cannot bound this retry.
+          if (request === TELEGRAM_REWRITE) return;
+          // Honor explicit inline format requests; merely asking to save a JSON/Markdown file is not an opt-out.
+          if (/\b(?:reply|respond|answer|return)\b[^\n]{0,60}\b(?:json|markdown|code)\b|\b(?:json|markdown|code)\b[^\n]{0,40}\b(?:inline|in (?:the )?chat)\b/i.test(request)) return;
+          return { continue: TELEGRAM_REWRITE };
+        },
+      })] : [],
     }),
   );
   const web = webExtension(config);
