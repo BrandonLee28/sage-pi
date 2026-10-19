@@ -338,9 +338,10 @@ export async function openAssistant(
             });
           if (!profile.trim()) return undefined;
           // Bound always-loaded context; the native read tool can open the full file.
-          return profile.length <= USER_PROFILE_MAX_CHARS ? profile
+          const content = profile.length <= USER_PROFILE_MAX_CHARS ? profile
             : profile.slice(0, USER_PROFILE_MAX_CHARS) +
               "\n[USER.md truncated to 2,000 characters. Read USER.md only if more detail is needed.]";
+          return "Profile file: USER.md (shared across conversations). Update this file only when the user asks.\n\n" + content;
         }),
         section("instructions_file", () =>
           readFile(join(workspace, "AGENTS.md"), "utf8"),
