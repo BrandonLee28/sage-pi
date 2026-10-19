@@ -36,6 +36,7 @@ import { routinesExtension } from "../extensions/routines.ts";
 import type { Config } from "./config.ts";
 
 export const context = BACKGROUND_CONTEXT;
+const USER_PROFILE_MAX_CHARS = 2000;
 const DeliveryIndex = defineDoc<{ tasks: Record<string, TaskId> }>({
   kind: "personal.deliveries",
   version: 1,
@@ -278,6 +279,18 @@ export async function openAssistant(
         section("soul", () =>
           readFile(join(workspace, "SOUL.md"), "utf8"),
         ),
+        section("user_profile", async () => {
+          const profile = await readFile(join(workspace, "USER.md"), "utf8")
+            .catch((error: NodeJS.ErrnoException) => {
+              if (error.code === "ENOENT") return "";
+              throw error;
+            });
+          if (!profile.trim()) return undefined;
+          // Bound always-loaded context; the native read tool can open the full file.
+          return profile.length <= USER_PROFILE_MAX_CHARS ? profile
+            : profile.slice(0, USER_PROFILE_MAX_CHARS) +
+              "\n[USER.md truncated to 2,000 characters. Read USER.md only if more detail is needed.]";
+        }),
         section("instructions_file", () =>
           readFile(join(workspace, "AGENTS.md"), "utf8"),
         ),
