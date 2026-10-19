@@ -238,12 +238,14 @@ the TUI and every Telegram thread.
 `instructions/` contains first-run templates; startup preserves existing workspace
 edits. See [extensions/README.md](extensions/README.md) for a native Pi tool example.
 
-The default personality in `instructions/SOUL.md` is copied verbatim from the
+The personality section in `instructions/SOUL.md` is copied verbatim from the
 `kawaii` entry in [Hermes Agent's built-in personalities](https://github.com/NousResearch/hermes-agent/blob/ddabd3837862022a6053331fe3ba97cf9716b9e3/hermes_cli/personality.py#L22)
 (commit `ddabd3837862022a6053331fe3ba97cf9716b9e3`). Hermes defines it as a
 personality preset, not a separate SOUL.md file. It is distinct from its `uwu`
 preset. The text is unmodified, with the upstream [MIT license](vendor/hermes-personality/LICENSE)
-retained. Telegram follows SOUL.md for personality.
+retained. Sage keeps its own identity and the original accountability and trust
+guidance, with normal spelling in the accountability example. Other custom voice
+and playfulness instructions are removed. Telegram follows SOUL.md for personality.
 
 For an existing workspace, edit `data/workspace/SOUL.md` using
 `instructions/SOUL.md` as the reference; update `data/workspace/TELEGRAM.md` from
