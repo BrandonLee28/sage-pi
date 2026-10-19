@@ -238,11 +238,18 @@ the TUI and every Telegram thread.
 `instructions/` contains first-run templates; startup preserves existing workspace
 edits. See [extensions/README.md](extensions/README.md) for a native Pi tool example.
 
-The default voice is playful, affectionate uwu speech, with occasional stutters
-and frequent kaomoji. Technical literals and factual names stay exact. For an
-existing workspace, edit `data/workspace/SOUL.md` using `instructions/SOUL.md` as
-the reference; update `data/workspace/TELEGRAM.md` from its template too if you use
-Telegram. Keep any personal edits you want. The next model request picks them up.
+The default voice is warm, direct, and lightly playful, with normal spelling and
+occasional humor. Baby talk, stutters, and forced cute language are not defaults;
+a stylized voice needs an explicit request. Facts and technical literals stay exact.
+This follows [Hermes's approach](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/personality.md):
+keep the baseline voice in SOUL.md and make exaggerated styles optional. Sage uses
+its existing native Pi prompt sections; no personality switcher is added.
+
+For an existing workspace, edit `data/workspace/SOUL.md` using
+`instructions/SOUL.md` as the reference; update `data/workspace/TELEGRAM.md` from
+its template too if you use Telegram. Keep any personal edits you want. Updating
+the templates alone does not change an existing workspace. The next model request
+picks up edits to the runtime files.
 
 Keep `USER.md` to a few user-confirmed facts: preferred name, communication needs,
 enduring goals, and useful constraints. The template contains no personal facts.
