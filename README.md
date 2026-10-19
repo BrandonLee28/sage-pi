@@ -103,6 +103,9 @@ run in `DATA_DIR/workspace`, with the local `node_modules/.bin` on PATH. Use abs
 paths for scripts outside that workspace. Server logs appear during the explicit
 connection test, and stay out of the conversation TUI.
 
+MCP servers whose generated tool names collide with an installed tool are skipped
+with a startup diagnostic; rename the conflicting server and restart.
+
 `--env` is repeatable and passes only named environment variables in addition to
 the SDK's basic process environment. `--token-env` reads an HTTP bearer token by
 name. Store secret values in `.env`/environment, not command arguments or URLs.

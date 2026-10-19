@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -16,6 +18,55 @@ import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { context, openAssistant } from "../src/assistant.ts";
 import { readConfig } from "../src/config.ts";
+
+test("isolated assistant tests do not launch MCP servers from configured settings", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "sage-mcp-isolation-"));
+  const marker = join(dataDir, "unexpected-server-launch");
+  try {
+    await writeFile(join(dataDir, "settings.json"), JSON.stringify({ mcpServers: {
+      isolation_probe: { command: process.execPath, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'launched')`] },
+    } }));
+    const coreTest = fileURLToPath(new URL("./core.test.ts", import.meta.url));
+    const { stdout } = await promisify(execFile)(process.execPath, ["--test", "--test-reporter=tap", "--test-name-pattern=upstream TUI adapter", coreTest], {
+      env: { ...process.env, NODE_TEST_CONTEXT: undefined, DATA_DIR: dataDir, TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "" }, timeout: 15000,
+    });
+    assert.match(stdout, /pass 1\b/);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("colliding MCP servers cannot shadow installed tools or partially install their tools", async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "sage-mcp-collision-"));
+  const server = fileURLToPath(new URL("./mcp-server.ts", import.meta.url));
+  const config = { ...readConfig(), dataDir, enableShell: false, telegramToken: "", telegramChat: "",
+    searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "", appleId: "", appleAppPassword: "", appleCalendarUrl: "",
+    mcpServers: {
+      a: { command: process.execPath, args: [server, "b__echo", "first server"] },
+      a__b: { command: process.execPath, args: [server, "echo", "second server"] },
+      unrelated: { command: process.execPath, args: [server, "echo", "unrelated server"] },
+    },
+  };
+  const diagnostics: string[] = [];
+  t.mock.method(console, "error", (message: unknown) => { diagnostics.push(String(message)); });
+  const faux = fauxProvider(), models = createModels();
+  models.setProvider(faux.provider);
+  const assistant = await openAssistant(config, { models, model: { provider: "faux", modelId: "faux-1" } });
+  try {
+    const tools = assistant.registry.snapshot().tools();
+    assert.equal(tools.filter(({ tool }) => tool.name === "mcp__a__b__echo").length, 1);
+    assert.ok(tools.some(({ tool }) => tool.name === "mcp__unrelated__echo"));
+    assert.ok(!assistant.registry.snapshot().installed().some((extension) => extension.name === "mcp:a__b"));
+    assert.match(diagnostics.join("\n"), /a__b skipped: tool mcp__a__b__echo is already registered/);
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("mcp__a__b__echo", { text: "hello" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Done."),
+    ]);
+    await (await assistant.submit("Call the first server.")).wait(context);
+    const transcript = JSON.stringify((await assistant.root.context(context)).messages);
+    assert.match(transcript, /origin=first server/);
+    assert.doesNotMatch(transcript, /origin=second server/);
+  } finally { await assistant.close(); await rm(dataDir, { recursive: true, force: true }); }
+});
 
 test("MCP tools use Pi's native validation/execution and close on shutdown", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-mcp-"));

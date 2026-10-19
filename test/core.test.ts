@@ -25,6 +25,7 @@ async function fixture() {
   const config = {
     ...readConfig(),
     dataDir,
+    mcpServers: {},
     enableShell: false,
     telegramToken: "",
     telegramChat: "",

@@ -10,7 +10,7 @@ process.env.TELEGRAM_BOT_TOKEN = "";
 process.env.TELEGRAM_CHAT_ID = "";
 const dataDir = await mkdtemp(join(tmpdir(), "sage-telegram-style-live-"));
 const assistant = await openAssistant({
-  ...readConfig(), dataDir, enableShell: false, telegramToken: "", telegramChat: "",
+  ...readConfig(), dataDir, mcpServers: {}, enableShell: false, telegramToken: "", telegramChat: "",
   appleId: "", appleAppPassword: "", appleCalendarUrl: "",
   searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "",
 }, { sendTelegram: async () => {} });

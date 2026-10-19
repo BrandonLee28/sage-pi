@@ -446,6 +446,13 @@ export async function openAssistant(
   for (const [name, server] of Object.entries(config.mcpServers)) {
     try {
       const connection = await connectMcp(name, server, workspace);
+      const registered = new Set(registry.snapshot().tools().map(({ tool }) => tool.name));
+      const collision = connection.extension.tools?.find((tool) => registered.has(tool.name));
+      if (collision) {
+        console.error(`[MCP] ${name} skipped: tool ${collision.name} is already registered. Rename this server with sage mcp and restart.`);
+        await connection.close();
+        continue;
+      }
       mcp.push(connection);
       registry.install(connection.extension);
     } catch {

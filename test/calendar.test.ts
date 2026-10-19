@@ -64,7 +64,7 @@ test("iCloud tools read agendas, safely serialize dates, preserve edits, and che
   const models = createModels();
   models.setProvider(faux.provider);
   const assistant = await openAssistant({
-    ...readConfig(), dataDir, enableShell: false,
+    ...readConfig(), dataDir, mcpServers: {}, enableShell: false,
     telegramToken: "", telegramChat: "", searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "",
     appleId: "test@example.invalid", appleAppPassword: "test-only-password", appleCalendarUrl: calendar.url,
   }, { models, model: { provider: "faux", modelId: "faux-1" } });
