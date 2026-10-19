@@ -237,6 +237,15 @@ first used; the existing main transcript stays in the main conversation. Unthrea
 Telegram messages use main. Use `/agents` in the TUI to inspect a thread or work in
 it. Send the bot a message first so it can deliver proactive updates.
 Telegram receives the completed reply; the TUI can show text while it streams.
+With Telegram delivery enabled, a native system-prompt section asks Sage to write
+like a text conversation: short, natural plain-text replies, including scheduled
+check-ins. Markdown, JSON, code, and long formatted reports belong in workspace
+files with a brief chat summary and saved path, unless you explicitly request a
+format inline. The gateway sends the model's reply unchanged; this is a standing
+instruction, not a saved memory or a formatting filter. It applies to the shared
+TUI conversations too. Existing runtime instruction files are preserved; restart
+Sage after updating to load this section. Outbound file attachments are not yet
+supported, so a saved file is not automatically uploaded to Telegram.
 Telegram shows “typing…” while Sage handles your message, including uploads and
 tool work, with renewal in the originating topic. Presence stops on completion,
 `/stop`, or gateway shutdown; a presence API failure does not prevent the reply.

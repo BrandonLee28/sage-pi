@@ -75,6 +75,58 @@ test("Sage's soul enters the native prompt, refreshes live, and preserves edits 
   }
 });
 
+test("Telegram texting instructions cover replies, files, scheduled check-ins, and restart without overwriting the workspace", async () => {
+  const f = await fixture();
+  const workspace = join(f.config.dataDir, "workspace");
+  const agentsPath = join(workspace, "AGENTS.md");
+  const customInstructions = "Keep these existing runtime instructions.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(agentsPath, customInstructions);
+  const send = async () => {};
+  let assistant = await f.open(send);
+  const assertStyle = async (conversation = assistant.root) => {
+    const prompt = getCurrentSystemPrompt((await conversation.context(context)).messages);
+    assert.ok(prompt.includes(customInstructions));
+    assert.ok(prompt.includes("<telegram_reply_style>"));
+  };
+  try {
+    f.faux.setResponses([
+      fauxAssistantMessage("Hey, what's up?"),
+      fauxAssistantMessage(fauxToolCall("write", { path: "report.md", content: "# Report\n\n**Complete.**\n" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Done. I saved it in report.md."),
+      fauxAssistantMessage("Time to check in."),
+      fauxAssistantMessage("Still here."),
+      fauxAssistantMessage("Terminal only."),
+    ]);
+    await (await assistant.submit("Hello.", undefined, true)).wait(context);
+    await assertStyle();
+    const topic = await assistant.telegramConversation(46);
+    await (await assistant.submit("Save a Markdown report.", undefined, true, true, topic)).wait(context);
+    await assertStyle(topic);
+    assert.equal(await readFile(join(workspace, "report.md"), "utf8"), "# Report\n\n**Complete.**\n");
+    await (await assistant.submit("Scheduled check-in.", undefined, true, false, topic)).wait(context);
+    await assertStyle(topic);
+
+    await assistant.close();
+    assistant = await f.open(send);
+    assert.equal(await readFile(agentsPath, "utf8"), customInstructions);
+    const restoredTopic = await assistant.telegramConversation(46);
+    assert.equal(restoredTopic.id, topic.id);
+    await (await assistant.submit("Hello again.", undefined, true, true, restoredTopic)).wait(context);
+    await assertStyle(restoredTopic);
+
+    await assistant.close();
+    assistant = await f.open();
+    const terminalTopic = await assistant.telegramConversation(46);
+    await (await assistant.submit("Terminal only.", undefined, false, true, terminalTopic)).wait(context);
+    const prompt = getCurrentSystemPrompt((await terminalTopic.context(context)).messages);
+    assert.ok(!prompt.includes("<telegram_reply_style>"));
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
 test("USER.md is seeded, refreshes across conversations, and preserves edits on restart", async () => {
   const f = await fixture();
   let assistant = await f.open();
