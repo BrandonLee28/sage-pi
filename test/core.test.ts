@@ -54,11 +54,13 @@ test("Sage's soul enters the native prompt, refreshes live, and preserves edits 
   const f = await fixture();
   let assistant = await f.open();
   const soulPath = join(assistant.workspace, "SOUL.md");
+  const defaultSoul = await readFile(new URL("../instructions/SOUL.md", import.meta.url), "utf8");
   const prompt = async () => getCurrentSystemPrompt((await assistant.root.context(context)).messages);
   try {
     f.faux.setResponses([fauxAssistantMessage("Hello."), fauxAssistantMessage("Updated."), fauxAssistantMessage("Still Sage.")]);
     assert.equal((await (await assistant.submit("Hello.")).wait(context)).status, "done");
-    assert.ok((await prompt()).includes("You are Sage: curious, opinionated, playfully flirty"));
+    assert.equal(await readFile(soulPath, "utf8"), defaultSoul);
+    assert.ok((await prompt()).includes(defaultSoul));
     const customSoul = "You are Sage. Custom personality: a dry sense of humor.";
     await writeFile(soulPath, customSoul);
     assert.equal((await (await assistant.submit("Hello again.")).wait(context)).status, "done");
