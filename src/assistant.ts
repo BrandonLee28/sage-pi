@@ -45,6 +45,12 @@ const TELEGRAM_REWRITE = "Rewrite your last answer as a plain-text Telegram mess
   "use short natural sentences or one plain line per schedule item. " +
   "Do not add slang, an unsolicited offer, or a follow-up question. " +
   "This is a wording correction only: do not repeat tools or actions, and do not invent file delivery.";
+const TELEGRAM_SHORTEN = TELEGRAM_REWRITE +
+  " The draft is too much for an ordinary text. Default to 1–3 short sentences, usually under 60 words. " +
+  "Keep only the direct answer, decision-critical facts or constraints, and at most one useful next step. " +
+  "Remove the full recap, repeated schedule, extra alternatives, and repeated conclusion. " +
+  "If the original user explicitly asked for detail, a full plan, or a complete list, keep the requested content " +
+  "and shorten only the surrounding commentary. Do not cut off sentences or change facts.";
 const DeliveryIndex = defineDoc<{ tasks: Record<string, TaskId> }>({
   kind: "personal.deliveries",
   version: 1,
@@ -305,6 +311,9 @@ export async function openAssistant(
         section("telegram_reply_style", () => options.sendTelegram
           ? readFile(join(workspace, "TELEGRAM.md"), "utf8")
           : undefined),
+        section("telegram_brevity", () => options.sendTelegram
+          ? readFile(join(workspace, "TELEGRAM-BREVITY.md"), "utf8")
+          : undefined),
         section("skills", async () => {
           const folders = await readdir(join(workspace, "skills"), {
             withFileTypes: true,
@@ -328,7 +337,8 @@ export async function openAssistant(
       ],
       hooks: options.sendTelegram ? [hook(GenerationTask, {
         beforeRequest: (request) => {
-          if (request.messages.findLast((message) => message.role === "user")?.content !== TELEGRAM_REWRITE) return;
+          const content = request.messages.findLast((message) => message.role === "user")?.content;
+          if (content !== TELEGRAM_REWRITE && content !== TELEGRAM_SHORTEN) return;
           // This request may only reword the completed answer; it cannot repeat an external action.
           return { messages: [...request.messages, {
             role: "system", content: "Reword the answer only. Tools are unavailable for this correction.",
@@ -340,7 +350,8 @@ export async function openAssistant(
           let structured = false;
           try { const value = JSON.parse(text); structured = value !== null && typeof value === "object"; }
           catch { /* Ordinary conversation is not JSON. */ }
-          if (!structured && !/(?:\*\*[^*\n]+\*\*|```|^#{1,6} |\[[^\]\n]+\]\(https?:\/\/)/m.test(text)) return;
+          const verbose = text.trim().split(/\s+/u).length > 80;
+          if (!verbose && !structured && !/(?:\*\*[^*\n]+\*\*|```|^#{1,6} |\[[^\]\n]+\]\(https?:\/\/)/m.test(text)) return;
           const conversation = await harness.conversation(api.conversationId, callContext);
           if (!conversation) throw new Error("Missing conversation for Telegram style correction");
           const messages = (await conversation.context(callContext)).messages;
@@ -348,10 +359,10 @@ export async function openAssistant(
           const request = user?.role === "user" ? (typeof user.content === "string" ? user.content
             : user.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n")) : "";
           // The native continuation starts a new generation task, so task-local memos cannot bound this retry.
-          if (request === TELEGRAM_REWRITE) return;
+          if (request === TELEGRAM_REWRITE || request === TELEGRAM_SHORTEN) return;
           // Honor explicit inline format requests; merely asking to save a JSON/Markdown file is not an opt-out.
           if (/\b(?:reply|respond|answer|return)\b[^\n]{0,60}\b(?:json|markdown|code)\b|\b(?:json|markdown|code)\b[^\n]{0,40}\b(?:inline|in (?:the )?chat)\b/i.test(request)) return;
-          return { continue: TELEGRAM_REWRITE };
+          return { continue: verbose ? TELEGRAM_SHORTEN : TELEGRAM_REWRITE };
         },
       })] : [],
     }),

@@ -196,6 +196,48 @@ test("Telegram style correction is bounded, covers JSON and scheduled replies, a
   }
 });
 
+test("Telegram shortens dense plain text, preserves existing voice files, and leaves requested detail intact", async () => {
+  const f = await fixture();
+  const workspace = join(f.config.dataDir, "workspace");
+  await mkdir(workspace, { recursive: true });
+  const voicePath = join(workspace, "TELEGRAM.md");
+  await writeFile(voicePath, "Keep my custom voice.");
+  const sent: string[] = [];
+  const assistant = await f.open(async (text) => { sent.push(text); });
+  const dense = "Here is another recap of the plan with several unnecessary alternatives. ".repeat(10);
+  const brief = "Start the reading after lunch. Leave the errands for later.";
+  try {
+    assert.equal(await readFile(voicePath, "utf8"), "Keep my custom voice.");
+    assert.ok((await readFile(join(workspace, "TELEGRAM-BREVITY.md"), "utf8")).includes("1–3 short sentences"));
+    f.faux.setResponses([
+      fauxAssistantMessage(dense),
+      (request) => {
+        assert.equal(getCurrentTools(request.messages).length, 0);
+        assert.ok(getCurrentSystemPrompt(request.messages).includes("<telegram_brevity>"));
+        return fauxAssistantMessage(brief);
+      },
+      fauxAssistantMessage(dense), fauxAssistantMessage(dense),
+      fauxAssistantMessage(dense), fauxAssistantMessage(dense),
+      fauxAssistantMessage(brief),
+    ]);
+    assert.equal((await (await assistant.submit("Okay, I'll do the reading after lunch.", undefined, true)).wait(context)).status, "done");
+    for (let i = 0; i < 100 && sent.length === 0; i++) await pause(10);
+    assert.deepEqual(sent, [brief], "Only the shortened answer is delivered");
+    assert.equal(f.faux.state.callCount, 2);
+    await (await assistant.submit("Give me the full detailed plan.")).wait(context);
+    const detailed = (await assistant.root.context(context)).messages.findLast((message) => message.role === "assistant");
+    assert.ok(detailed?.role === "assistant" && detailed.content.some((part) => part.type === "text" && part.text === dense),
+      "Requested detail is not cut off by a transport word limit");
+    await (await assistant.submit("What should I do next?")).wait(context);
+    assert.equal(f.faux.state.callCount, 6, "An overlong second draft cannot cause an endless rewrite loop");
+    await (await assistant.submit("Got it.")).wait(context);
+    assert.equal(f.faux.state.callCount, 7, "An already brief answer needs no correction");
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
 test("USER.md is seeded, refreshes across conversations, and preserves edits on restart", async () => {
   const f = await fixture();
   let assistant = await f.open();
@@ -749,7 +791,11 @@ test("Telegram gateway preserves topics on every reply chunk and admits only its
     const reply = "Reply text. ".repeat(400);
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
-    f.faux.setResponses([async () => { await waiting; return fauxAssistantMessage(reply); }]);
+    f.faux.setResponses([
+      async () => { await waiting; return fauxAssistantMessage(reply); },
+      // Requested detail can stay long after the native brevity check; transport must still chunk it.
+      fauxAssistantMessage(reply),
+    ]);
     const incoming = (owner: number, text: string, update_id: number) => ({
       update_id,
       message: {
@@ -761,7 +807,7 @@ test("Telegram gateway preserves topics on every reply chunk and admits only its
     await bot.handleUpdate(incoming(100, "Unauthorized", 1));
     assert.equal(f.faux.state.callCount, 0);
     assert.equal(actions.length, 0);
-    await bot.handleUpdate(incoming(99, "Hello", 2));
+    await bot.handleUpdate(incoming(99, "Give me a full detailed report.", 2));
     assert.equal(actions.length, 1);
     await pause(4100);
     assert.ok(actions.length >= 2, "Presence renews during a long request");
