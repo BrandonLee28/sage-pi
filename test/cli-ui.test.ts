@@ -69,4 +69,7 @@ test("bottom command pickers fit their height and retain filtered selection on r
   assert.match(stripTerminalSequences(picker.render(40).join("\n")), /› Session 19/);
   picker.handleInput("\r");
   assert.equal(selected, "19");
+  const empty = new SagePicker("Schedules", []);
+  empty.setHeight(() => height);
+  assert.match(stripTerminalSequences(empty.render(40).join("\n")), /No entries available/);
 });

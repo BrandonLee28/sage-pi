@@ -122,6 +122,8 @@ export class DurableTui {
 		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
 			{ name: "skills", description: "Inspect available skills (read only)" },
 			{ name: "memory", description: "Inspect saved memory and profile (read only)" },
+			{ name: "schedules", description: "Inspect recurring routines and reminders (read only)" },
+			{ name: "crons", description: "Alias for /schedules" },
 			{ name: "new", description: "Start a fresh session" },
 			{ name: "sessions", description: "New session or saved chats" },
 			{ name: "model", description: "Choose a model" },
@@ -541,7 +543,7 @@ export async function runDurableTui(
 		exit = resolve;
 	});
 	let view!: DurableTui;
-	const inspect = async (kind: "skills" | "memory") => {
+	const inspect = async (kind: "skills" | "memory" | "schedules") => {
 		const data = await controller.inspect(kind);
 		if (data) view.showInspection(data);
 	};
@@ -591,6 +593,7 @@ export async function runDurableTui(
 		if (!trimmed) return;
 		if (trimmed === "/model") return selectModel();
 		if (trimmed === "/skills" || trimmed === "/memory") return void inspect(trimmed === "/skills" ? "skills" : "memory");
+		if (trimmed === "/schedules" || trimmed === "/crons") return void inspect("schedules");
 		if (trimmed === "/new") return void controller.newSession();
 		if (trimmed === "/tasks") return void controller.toggleTasks();
 		if (trimmed === "/sessions" || trimmed === "/agents") return selectConversation();

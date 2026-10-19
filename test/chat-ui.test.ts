@@ -125,18 +125,18 @@ test("a reopened long chat keeps Sage's header and styled native editor visible"
     }, SettingsManager.inMemory(), terminal);
     try {
       for (const send of ["\r", "\x1b\r"]) {
-        for (const command of ["/new", "/tasks", "/skills", "/memory"]) {
+        for (const command of ["/new", "/tasks", "/skills", "/memory", "/schedules", "/crons"]) {
           input(command);
           // Let Pi's native completion settle before confirming the command.
           await new Promise((resolve) => setImmediate(resolve));
           input(send);
           await new Promise((resolve) => setImmediate(resolve));
-          if (command === "/skills" || command === "/memory") input("\x1b");
+          if (["/skills", "/memory", "/schedules", "/crons"].includes(command)) input("\x1b");
         }
         input("A plain prompt");
         input(send);
       }
-      assert.deepEqual(commands, ["new", "tasks", "skills", "memory", "new", "tasks", "skills", "memory"]);
+      assert.deepEqual(commands, ["new", "tasks", "skills", "memory", "schedules", "schedules", "new", "tasks", "skills", "memory", "schedules", "schedules"]);
       assert.deepEqual(prompts, ["steer:A plain prompt", "followUp:A plain prompt"]);
     } finally { input("\x04"); await running; uiAdapter.dispose(); }
   } finally { await assistant.close(); await rm(dataDir, { recursive: true, force: true }); }

@@ -30,8 +30,9 @@ Local adaptations:
 - Add `/new` and a **New session** row to the session picker (`/sessions`, with
   `/agents` retained). The app adapter creates native Pi conversations and stores
   their local navigation index/selection in a native session document.
-- Add `/skills` and `/memory` as read-only panels in the bottom input area: a
-  shared picker and plain-text detail viewer, bounded to half the terminal height.
+- Add `/skills`, `/memory`, and `/schedules` (alias `/crons`) as read-only panels
+  in the bottom input area: a shared picker and plain-text detail viewer, bounded
+  to half the terminal height.
   All chat pickers use this compact dock layout; setup keeps its full menu layout.
   Data is read on opening through the app adapter;
   inspection does not enter the model transcript or invoke tools.

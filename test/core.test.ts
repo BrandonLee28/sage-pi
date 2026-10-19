@@ -13,6 +13,7 @@ import {
 import { context, openAssistant } from "../src/assistant.ts";
 import { readConfig } from "../src/config.ts";
 import { Index, MemoryRecords } from "../src/personal.ts";
+import { Routines } from "../extensions/routines.ts";
 import { agentOf, tuiAdapter } from "../src/tui-adapter.ts";
 import { localModels, singleStream } from "../src/model.ts";
 import { telegramGateway } from "../src/telegram.ts";
@@ -579,6 +580,54 @@ test("skills and memory inspectors read current shared state without inference o
     assert.ok(selected);
     const prompt = getCurrentSystemPrompt((await selected.context(context)).messages);
     assert.match(prompt, /skills\/observer\/SKILL.md: An freshly updated skill/);
+  } finally { adapter.dispose(); await assistant.close(); await f.cleanup(); }
+});
+
+test("schedule inspector lists shared cron routines and reminder wakes without changing them", async () => {
+  const f = await fixture();
+  const assistant = await f.open();
+  const adapter = await tuiAdapter(assistant, f.config);
+  try {
+    const empty = await adapter.controller.inspect("schedules");
+    assert.deepEqual(empty?.items, []);
+    assert.match(empty?.description ?? "", /No schedules saved/);
+    const at = Date.now() + 86400000;
+    await assistant.root.commit(async (tx) => {
+      const state = await tx.doc(Routines);
+      state.items.daily = {
+        id: "daily", title: "Daily review", instructions: "Review the saved test notes.",
+        cron: "0 9 * * *", timezone: "America/New_York", paused: false,
+        nextAt: at + 3600000, taskId: null, conversationId: assistant.root.id,
+        lastRunAt: at - 86400000, lastStatus: "done",
+      };
+      state.items.paused = { ...state.items.daily, id: "paused", title: "Paused review", paused: true, nextAt: null, lastRunAt: null, lastStatus: "not-run" };
+    }, context);
+    await assistant.saveCommitment({ id: "wake", title: "Test reminder", nextAction: "Review test data.", source: "test fixture", wakeAt: new Date(at).toISOString() });
+    await assistant.saveCommitment({ id: "due-only", title: "Due date only", dueAt: new Date(at).toISOString() });
+    await assistant.saveCommitment({ id: "cancelled", title: "Cancelled reminder", wakeAt: new Date(at).toISOString(), status: "cancelled" });
+    const beforeRoutines = await assistant.harness.snapshot(Routines, context);
+    const beforePersonal = await assistant.personalState();
+    const entries = JSON.stringify(adapter.source.current().conversation.entries);
+    const schedules = await adapter.controller.inspect("schedules");
+    assert.ok(schedules);
+    assert.match(schedules.description, /2 recurring · 1 reminders/);
+    assert.deepEqual(schedules.items.map((item) => item.value), ["reminder:wake", "routine:daily", "routine:paused"]);
+    assert.match(schedules.items[0].body, /One-time reminder: wake[\s\S]*Source: test fixture[\s\S]*Review test data/);
+    assert.ok(schedules.items[0].body.includes(new Date(at).toISOString()));
+    assert.ok(schedules.items[0].body.includes(f.config.timezone));
+    assert.match(schedules.items[1].body, /Status: Enabled\nCron: 0 9 \* \* \*\nTimezone: America\/New_York/);
+    assert.ok(schedules.items[1].body.includes(new Date(at + 3600000).toLocaleString("en-US", { timeZone: "America/New_York" })));
+    assert.match(schedules.items[1].body, /Last result: done[\s\S]*Review the saved test notes/);
+    assert.match(schedules.items[2].description, /Paused/);
+    assert.match(schedules.items[2].body, /Next run: None[\s\S]*Last run: None/);
+    assert.equal(f.faux.state.callCount, 0);
+    assert.equal(JSON.stringify(adapter.source.current().conversation.entries), entries);
+    assert.deepEqual(await assistant.harness.snapshot(Routines, context), beforeRoutines);
+    assert.deepEqual(await assistant.personalState(), beforePersonal);
+    await adapter.controller.newSession();
+    assert.deepEqual((await adapter.controller.inspect("schedules"))?.items, schedules.items);
+    await assistant.root.commit(async (tx) => { delete (await tx.doc(Routines)).items.paused; }, context);
+    assert.equal((await adapter.controller.inspect("schedules"))?.items.length, 2);
   } finally { adapter.dispose(); await assistant.close(); await f.cleanup(); }
 });
 

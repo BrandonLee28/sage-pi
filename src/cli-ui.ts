@@ -172,7 +172,7 @@ export class SagePicker implements Component, Focusable {
       selectedText: (value) => theme.fg("text", theme.bold(value)),
       description: (value) => theme.fg("muted", value),
       scrollInfo: (value) => theme.fg("dim", value),
-      noMatch: () => theme.fg("muted", "  No matches. Clear the filter to see all options."),
+      noMatch: () => theme.fg("muted", this.items.length ? "  No matches. Clear the filter to see all options." : "  No entries available."),
     }, { maxPrimaryColumnWidth: 36 });
     list.onSelect = (item) => this.onSelect?.(item.value);
     list.onCancel = () => this.onCancel?.();

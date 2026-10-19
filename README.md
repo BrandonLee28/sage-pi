@@ -148,6 +148,7 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | `/sessions`               | Create a session or return to a saved local chat or Telegram thread     |
 | `/skills`                 | Inspect available skills, descriptions, paths, and full files           |
 | `/memory`                 | Inspect saved memory, sources, timestamps, prompt inclusion, and USER.md |
+| `/schedules` or `/crons`   | Inspect recurring routines, cron expressions, and one-time reminders    |
 | `/agents`                 | Alias for `/sessions`                                                  |
 | `/help`                   | Show the short help notice                                             |
 | Ctrl+C / Ctrl+D           | Exit; unfinished durable work resumes on next start                    |
@@ -176,6 +177,13 @@ mean their full instructions have been read in the current session.
 The task graph is hidden at startup; `/tasks` shows or hides it. Background
 `personal.routine` entries waiting for their next scheduled run are durable timers.
 Hiding the panel leaves those schedules running.
+
+`/schedules` (also `/crons`) shows Sage's recurring routines, including paused
+ones, and reminders with a scheduled wake. Select one for its cron expression,
+timezone, next run, last result, saved instructions, or reminder details. Times
+show the routine's saved timezone (the configured timezone for reminders), with
+UTC timestamps in the details. Due dates without a wake are not scheduled reminders.
+This read-only snapshot refreshes on opening and does not run or change schedules.
 
 ## Homelab container
 
