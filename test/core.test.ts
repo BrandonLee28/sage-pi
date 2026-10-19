@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { context, openAssistant } from "../src/assistant.ts";
 import { readConfig } from "../src/config.ts";
+import { Index, MemoryRecords } from "../src/personal.ts";
 import { agentOf, tuiAdapter } from "../src/tui-adapter.ts";
 import { localModels, singleStream } from "../src/model.ts";
 import { telegramGateway } from "../src/telegram.ts";
@@ -522,6 +523,60 @@ test("new TUI sessions isolate history, keep model preferences, and restore acro
     assert.equal(adapter.source.current().conversations.length, 3);
     assert.equal(adapter.source.current().conversations.at(-1)?.label, "Session 2");
     assert.doesNotMatch(JSON.stringify(adapter.source.current().conversation.entries), /MAIN-ONLY|NEW-SESSION-ONLY/);
+  } finally { adapter.dispose(); await assistant.close(); await f.cleanup(); }
+});
+
+test("skills and memory inspectors read current shared state without inference or writes", async () => {
+  const f = await fixture();
+  const assistant = await f.open();
+  const skillPath = join(assistant.workspace, "skills/observer/SKILL.md");
+  const skill = "---\nname: observer\ndescription: An inspection test skill.\n---\nFull skill instructions.\n";
+  const profile = "Profile text. ".repeat(200);
+  await mkdir(join(assistant.workspace, "skills/observer"), { recursive: true });
+  await mkdir(join(assistant.workspace, "skills/unreadable"), { recursive: true });
+  await writeFile(skillPath, skill);
+  await writeFile(join(assistant.workspace, "USER.md"), profile);
+  await assistant.root.commit(async (tx) => {
+    const index = await tx.doc(Index, assistant.root.id);
+    for (let number = 0; number < 10; number++) {
+      const key = `test-${number}`;
+      await tx.doc(MemoryRecords, assistant.root.id, key, { key, text: `Fact ${number}`, source: "test fixture", pinned: number < 9, updatedAt: 1000 });
+      index.memories.push(key);
+    }
+  }, context);
+  const adapter = await tuiAdapter(assistant, f.config);
+  try {
+    const before = await assistant.personalState();
+    const entries = JSON.stringify(adapter.source.current().conversation.entries);
+    const skills = await adapter.controller.inspect("skills");
+    assert.ok(skills);
+    assert.equal(skills.items.find((item) => item.label === "observer")?.description, "An inspection test skill.");
+    assert.ok(skills.items.find((item) => item.label === "observer")?.body.includes(skill));
+    assert.match(skills.items.find((item) => item.label === "unreadable")?.description ?? "", /missing or unreadable/);
+    const memory = await adapter.controller.inspect("memory");
+    assert.ok(memory);
+    assert.match(memory.description, /10 saved · 8 included/);
+    assert.match(memory.items.find((item) => item.value === "profile")?.description ?? "", /2000 characters/);
+    assert.ok(memory.items.find((item) => item.value === "profile")?.body.includes(profile));
+    assert.match(memory.items.find((item) => item.label === "test-0")?.description ?? "", /outside the last 8/);
+    assert.match(memory.items.find((item) => item.label === "test-8")?.description ?? "", /included on next request/);
+    assert.match(memory.items.find((item) => item.label === "test-9")?.description ?? "", /retrieved on demand/);
+    assert.match(memory.items.find((item) => item.label === "test-8")?.body ?? "", /Source: test fixture[\s\S]*1970-01-01T00:00:01.000Z[\s\S]*Fact 8/);
+    assert.equal(f.faux.state.callCount, 0);
+    assert.equal(JSON.stringify(adapter.source.current().conversation.entries), entries);
+    assert.deepEqual(await assistant.personalState(), before);
+    assert.equal(await readFile(skillPath, "utf8"), skill);
+    await writeFile(skillPath, skill.replace("inspection test", "freshly updated"));
+    assert.match((await adapter.controller.inspect("skills"))?.items.find((item) => item.label === "observer")?.description ?? "", /freshly updated/);
+    await adapter.controller.newSession();
+    assert.deepEqual((await adapter.controller.inspect("memory"))?.items, memory.items);
+    f.faux.setResponses([fauxAssistantMessage("Ready.")]);
+    await adapter.controller.submit("Hello.", "steer");
+    await assistant.harness.waitForIdle(context);
+    const selected = await assistant.harness.conversation(adapter.source.current().conversation.conversation.id, context);
+    assert.ok(selected);
+    const prompt = getCurrentSystemPrompt((await selected.context(context)).messages);
+    assert.match(prompt, /skills\/observer\/SKILL.md: An freshly updated skill/);
   } finally { adapter.dispose(); await assistant.close(); await f.cleanup(); }
 });
 

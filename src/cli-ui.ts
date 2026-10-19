@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
-  Input, ProcessTerminal, SelectList, TuiMainScreen,
+  Input, ProcessTerminal, SelectList, Text, TuiMainScreen,
   fuzzyFilter, getKeybindings, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth,
   type Component, type Focusable, type SelectItem,
 } from "@earendil-works/pi-tui";
@@ -95,6 +95,52 @@ export class SageFooter implements Component {
       row("/ commands · shift+tab effort", `${clean(this.model)}:${clean(this.thinking)}${this.context ? " · " + (this.contextWarning ? theme.fg("error", clean(this.context)) : clean(this.context)) : ""}`),
       row("enter send · alt+enter queue · esc stop", clean(this.usage)),
     ];
+  }
+}
+
+/** Plain text only: inspecting a memory or skill never executes or edits it. */
+export class SageDetails implements Component, Focusable {
+  focused = false;
+  onBack?: () => void;
+  onClose?: () => void;
+  private offset = 0;
+  private pageSize = 1;
+  private lineCount = 0;
+  private title: string;
+  private text: Text;
+  private height: () => number;
+  constructor(title: string, content: string, height: () => number) {
+    this.title = clean(title);
+    this.text = new Text(content.split("\n").map(clean).join("\n"), 1, 0);
+    this.height = height;
+  }
+  invalidate() { this.text.invalidate(); }
+  handleInput(data: string) {
+    if (matchesKey(data, "escape")) return this.onBack?.();
+    if (matchesKey(data, "ctrl+c")) return this.onClose?.();
+    if (matchesKey(data, "up")) this.offset--;
+    if (matchesKey(data, "down")) this.offset++;
+    if (matchesKey(data, "pageUp")) this.offset -= this.pageSize;
+    if (matchesKey(data, "pageDown")) this.offset += this.pageSize;
+    if (matchesKey(data, "home")) this.offset = 0;
+    if (matchesKey(data, "end")) this.offset = this.lineCount;
+    this.offset = Math.max(0, Math.min(this.offset, this.lineCount - this.pageSize));
+  }
+  render(width: number): string[] {
+    const rows = this.text.render(width);
+    this.lineCount = rows.length;
+    this.pageSize = Math.max(1, this.height() - 5);
+    this.offset = Math.max(0, Math.min(this.offset, rows.length - this.pageSize));
+    const lines = [
+      " " + theme.bold(this.title) + theme.fg("dim", " · read only"),
+      theme.fg("borderMuted", "─".repeat(Math.max(1, width))),
+      ...rows.slice(this.offset, this.offset + this.pageSize), "",
+      " " + theme.fg("dim", `${this.offset + 1}–${Math.min(rows.length, this.offset + this.pageSize)} / ${rows.length} · ↑↓ / PgUp/PgDn scroll · esc back · ctrl+c close`),
+    ];
+    return lines.map((line) => {
+      const row = truncateToWidth(line, Math.max(1, width));
+      return theme.bg("customMessageBg", row + " ".repeat(Math.max(0, width - visibleWidth(row))));
+    });
   }
 }
 

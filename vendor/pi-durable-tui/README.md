@@ -28,6 +28,9 @@ Local adaptations:
 - Add `/new` and a **New session** row to the session picker (`/sessions`, with
   `/agents` retained). The app adapter creates native Pi conversations and stores
   their local navigation index/selection in a native session document.
+- Add `/skills` and `/memory` as native read-only overlays: a shared picker and
+  plain-text detail viewer. Data is read on opening through the app adapter;
+  inspection does not enter the model transcript or invoke tools.
 
 See [Prime design provenance](../prime-design/README.md) for the reference and license.
 

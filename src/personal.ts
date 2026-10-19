@@ -21,6 +21,7 @@ export type Memory = {
   updatedAt: number;
   pinned: boolean;
 };
+export const PINNED_MEMORY_LIMIT = 8;
 export type Commitment = {
   id: string;
   title: string;
@@ -393,7 +394,7 @@ export function personalExtension(options: {
         );
         return JSON.stringify({
           timezone: options.timezone,
-          pinnedMemories: state.memories.filter((m) => m.pinned).slice(-8),
+          pinnedMemories: state.memories.filter((m) => m.pinned).slice(-PINNED_MEMORY_LIMIT),
           openCommitments: state.commitments
             .filter((c) => !["done", "cancelled"].includes(c.status))
             .slice(-25),

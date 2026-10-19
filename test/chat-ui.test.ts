@@ -9,7 +9,7 @@ import { CURSOR_MARKER, stripTerminalSequences, visibleWidth, type Terminal } fr
 import { openAssistant, context } from "../src/assistant.ts";
 import { readConfig } from "../src/config.ts";
 import { tuiAdapter } from "../src/tui-adapter.ts";
-import { SageEditor, registerSageTheme } from "../src/cli-ui.ts";
+import { SageDetails, SageEditor, SagePicker, registerSageTheme } from "../src/cli-ui.ts";
 import { DurableTui } from "../vendor/pi-durable-tui/tui.ts";
 
 test("a reopened long chat keeps Sage's header and styled native editor visible", async () => {
@@ -64,6 +64,30 @@ test("a reopened long chat keeps Sage's header and styled native editor visible"
       assert.equal(editor.getText(), "A native editor draf!t");
       editor.setText("line one\nline two");
       assert.match(stripTerminalSequences(editor.render(40).join("\n")), /line one[\s\S]*line two/);
+      const draft = editor.getText();
+      view.showInspection({ title: "Skills", description: "Read-only test data", items: [{
+        value: "test", label: "Test skill", description: "Inspect full contents",
+        body: "\x1b]0;unsafe-title\x07\n" + Array.from({ length: 60 }, (_, index) => `OBSERVATION-ONLY line ${index}`).join("\n"),
+      }] });
+      const picker = view.ui.getFocusedComponent();
+      assert.ok(picker instanceof SagePicker);
+      picker.handleInput("\r");
+      const details = view.ui.getFocusedComponent();
+      assert.ok(details instanceof SageDetails);
+      view.ui.renderNow(true);
+      assert.match(view.ui.getScreenLines().map(stripTerminalSequences).join("\n"), /Test skill · read only/);
+      assert.doesNotMatch(view.ui.getScreenLines().join("\n"), /\x1b\]0;unsafe-title/);
+      details.handleInput("\x1b[6~");
+      view.ui.renderNow(true);
+      details.handleInput("\x1b[F");
+      view.ui.renderNow(true);
+      assert.match(view.ui.getScreenLines().map(stripTerminalSequences).join("\n"), /OBSERVATION-ONLY line 59/);
+      details.handleInput("\x1b");
+      assert.equal(view.ui.getFocusedComponent(), picker);
+      picker.handleInput("\x1b");
+      assert.equal(view.ui.getFocusedComponent(), editor);
+      assert.equal(editor.getText(), draft);
+      assert.doesNotMatch(JSON.stringify(adapter.source.current().conversation.entries), /OBSERVATION-ONLY/);
     } finally { view.stop(); adapter.dispose(); }
   } finally { await assistant.close(); await rm(dataDir, { recursive: true, force: true }); }
 });

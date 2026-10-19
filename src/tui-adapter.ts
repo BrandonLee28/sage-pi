@@ -5,7 +5,10 @@ import type {
   ModelRef,
   TaskGraph,
 } from "@earendil-works/pi-durable";
-import { context, TelegramTopics, TuiSessions, type Assistant } from "./assistant.ts";
+import { context, TelegramTopics, TuiSessions, USER_PROFILE_MAX_CHARS, type Assistant } from "./assistant.ts";
+import { PINNED_MEMORY_LIMIT } from "./personal.ts";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 
@@ -26,6 +29,11 @@ export type DurableViewSource = {
   current(): DurableView;
   subscribe(listener: () => void): () => void;
 };
+export type Inspection = {
+  title: string;
+  description: string;
+  items: { value: string; label: string; description: string; body: string }[];
+};
 export type DurableController = {
   submit(text: string, whenBusy: "steer" | "followUp"): Promise<void>;
   compact(instructions: string | undefined): Promise<void>;
@@ -35,6 +43,7 @@ export type DurableController = {
   setModel(model: ModelRef): Promise<void>;
   toggleTasks(): Promise<void>;
   newSession(): Promise<void>;
+  inspect(kind: "skills" | "memory"): Promise<Inspection | undefined>;
   switchConversation(id: ConversationId): Promise<void>;
 };
 export const agentOf = (view: ConversationView): AgentState =>
@@ -108,7 +117,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
         if (text.trim() === "/new") return controller.newSession();
         if (text.trim() === "/help") {
           notice(
-            "/new new session · /sessions or /agents saved chats · /model · /tasks task graph · /compact [instructions] · Esc stop · Ctrl+O expand tools · Ctrl+C exit. Ask to list memories or responsibilities.",
+            "/new new session · /sessions saved chats · /skills and /memory read-only inspectors · /model · /tasks task graph · /compact [instructions] · Esc stop · Ctrl+O expand tools · Ctrl+C exit.",
           );
           return;
         }
@@ -167,6 +176,40 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       const created = await assistant.createSession(selected.id);
       await controller.switchConversation(created.id);
     }),
+    inspect: async (kind) => {
+      try {
+        if (kind === "skills") {
+          const skills = await assistant.skills();
+          return {
+            title: "Skills",
+            description: `${skills.filter((skill) => skill.readable).length} available · summaries advertised; full files read on demand`,
+            items: skills.map((skill) => ({
+              value: skill.path, label: skill.name,
+              description: skill.readable ? skill.description : "SKILL.md is missing or unreadable",
+              body: `${skill.path}\n\n${skill.readable ? skill.content : "Cannot read this skill file."}`,
+            })),
+          };
+        }
+        const { memories } = await assistant.personalState();
+        const included = new Set(memories.filter((memory) => memory.pinned).slice(-PINNED_MEMORY_LIMIT).map((memory) => memory.key));
+        const profile = await readFile(join(assistant.workspace, "USER.md"), "utf8").catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return "";
+          throw error;
+        });
+        return {
+          title: "Memory",
+          description: `${memories.length} saved · ${included.size} included on next request · shared across sessions`,
+          items: [{
+            value: "profile", label: "User profile", description: `USER.md · ${Math.min(profile.trim() ? profile.length : 0, USER_PROFILE_MAX_CHARS)} characters included`,
+            body: `USER.md\n\nThe first ${USER_PROFILE_MAX_CHARS.toLocaleString("en-US")} characters are included on each request. This view shows the full file.\n\n${profile || "No profile saved."}`,
+          }, ...memories.map((memory) => ({
+            value: `memory:${memory.key}`, label: memory.key,
+            description: included.has(memory.key) ? "Pinned · included on next request" : memory.pinned ? `Pinned · outside the last ${PINNED_MEMORY_LIMIT} pinned memories` : "Stored · retrieved on demand",
+            body: `Key: ${memory.key}\nPinned: ${memory.pinned ? "yes" : "no"}\nIncluded on next request: ${included.has(memory.key) ? "yes" : "no"}\nSource: ${memory.source}\nUpdated: ${new Date(memory.updatedAt).toISOString()}\n\n${memory.text}`,
+          }))],
+        };
+      } catch (error) { report(error); return undefined; }
+    },
     switchConversation: (id) => guard(async () => {
       if (!source.current().conversations.some((item) => item.id === id))
         throw new Error("Conversation is not configured.");

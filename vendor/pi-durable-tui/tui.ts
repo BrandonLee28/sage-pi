@@ -39,8 +39,8 @@ import { ToolExecutionComponent, type ToolRenderers } from "../../node_modules/@
 import { UserMessageComponent } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/user-message.js";
 import { getEditorTheme, getMarkdownTheme, theme } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { InteractiveThemeController } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-controller.js";
-import { SageEditor, SageFooter, SageHeader, SagePicker, registerSageTheme } from "../../src/cli-ui.ts";
-import { agentOf, type DurableController, type DurableView, type DurableViewSource } from "../../src/tui-adapter.ts";
+import { SageDetails, SageEditor, SageFooter, SageHeader, SagePicker, registerSageTheme } from "../../src/cli-ui.ts";
+import { agentOf, type DurableController, type DurableView, type DurableViewSource, type Inspection } from "../../src/tui-adapter.ts";
 
 /** The summary that replaced earlier context: collapsed to one line until expanded. */
 class CompactionComponent extends Box {
@@ -120,6 +120,8 @@ export class DurableTui {
 			embedWorkingStatus: true,
 		});
 		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
+			{ name: "skills", description: "Inspect available skills (read only)" },
+			{ name: "memory", description: "Inspect saved memory and profile (read only)" },
 			{ name: "new", description: "Start a fresh session" },
 			{ name: "sessions", description: "New session or saved chats" },
 			{ name: "model", description: "Choose a model" },
@@ -212,6 +214,20 @@ export class DurableTui {
 
 	restoreEditor(): void {
 		this.mount(this.#editor);
+	}
+
+	showInspection(data: Inspection): void {
+		const picker = new SagePicker(data.title, data.items, data.description);
+		const list = this.#ui.showOverlay(picker, { width: "100%", maxHeight: "100%", margin: 1 });
+		picker.onCancel = () => list.hide();
+		picker.onSelect = (value) => {
+			const item = data.items.find((item) => item.value === value);
+			if (!item) return;
+			const details = new SageDetails(item.label, item.body, () => Math.max(6, this.#ui.terminal.rows - 2));
+			const detail = this.#ui.showOverlay(details, { width: "100%", maxHeight: "100%", margin: 1 });
+			details.onBack = () => detail.hide();
+			details.onClose = () => { detail.hide(); list.hide(); };
+		};
 	}
 
 	apply(view: DurableView): void {
@@ -517,6 +533,10 @@ export async function runDurableTui(
 		exit = resolve;
 	});
 	let view!: DurableTui;
+	const inspect = async (kind: "skills" | "memory") => {
+		const data = await controller.inspect(kind);
+		if (data) view.showInspection(data);
+	};
 
 	const selectModel = async (): Promise<void> => {
 		await controller.refreshModels();
@@ -563,6 +583,7 @@ export async function runDurableTui(
 			const trimmed = text.trim();
 			if (!trimmed) return;
 			if (trimmed === "/model") return selectModel();
+			if (trimmed === "/skills" || trimmed === "/memory") return void inspect(trimmed === "/skills" ? "skills" : "memory");
 			if (trimmed === "/new") return void controller.newSession();
 			if (trimmed === "/tasks") return void controller.toggleTasks();
 			if (trimmed === "/sessions" || trimmed === "/agents") return selectConversation();

@@ -40,7 +40,16 @@ import { connectMcp } from "../extensions/mcp.ts";
 import type { Config } from "./config.ts";
 
 export const context = BACKGROUND_CONTEXT;
-const USER_PROFILE_MAX_CHARS = 2000;
+export const USER_PROFILE_MAX_CHARS = 2000;
+async function readSkills(workspace: string) {
+  const folders = await readdir(join(workspace, "skills"), { withFileTypes: true });
+  return Promise.all(folders.filter((folder) => folder.isDirectory()).map(async (folder) => {
+    const path = `skills/${folder.name}/SKILL.md`;
+    let readable = true;
+    const content = await readFile(join(workspace, path), "utf8").catch(() => { readable = false; return ""; });
+    return { name: folder.name, path, content, readable, description: content.match(/^description:\s*(.+)$/m)?.[1] ?? "" };
+  }));
+}
 const ModelChoice = defineDoc<{ revision: string | null }>({
   kind: "sage.model-choice", version: 1, scope: "conversation",
   history: "latest", fork: "current", initial: () => ({ revision: null }),
@@ -324,24 +333,8 @@ export async function openAssistant(
           ? readFile(join(workspace, "TELEGRAM-BREVITY.md"), "utf8")
           : undefined),
         section("skills", async () => {
-          const folders = await readdir(join(workspace, "skills"), {
-            withFileTypes: true,
-          });
-          const skills = await Promise.all(
-            folders
-              .filter((f) => f.isDirectory())
-              .map(async (folder) => {
-                const path = `skills/${folder.name}/SKILL.md`;
-                const contents = await readFile(
-                  join(workspace, path),
-                  "utf8",
-                ).catch(() => "");
-                const description =
-                  contents.match(/^description:\s*(.+)$/m)?.[1] ?? "";
-                return `${path}: ${description}`;
-              }),
-          );
-          return `Read a relevant SKILL.md before using it. Skills are maintained by the user. Do not create, edit, or delete skills unless the user explicitly asks.\n${skills.join("\n")}`;
+          const skills = await readSkills(workspace);
+          return `Read a relevant SKILL.md before using it. Skills are maintained by the user. Do not create, edit, or delete skills unless the user explicitly asks.\n${skills.map((skill) => `${skill.path}: ${skill.description}`).join("\n")}`;
         }),
       ],
       hooks: options.sendTelegram ? [hook(GenerationTask, {
@@ -504,6 +497,7 @@ export async function openAssistant(
     },
     registry,
     workspace,
+    skills: () => readSkills(workspace),
     personalState: () => personalState(harness, context),
     async saveCommitment(value: Parameters<typeof personal.saveCommitment>[2]) {
       return root.commit(

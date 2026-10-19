@@ -146,6 +146,8 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | `/model`                  | Refresh and select models advertised by your llama.cpp server          |
 | `/new`                    | Create and switch to a fresh saved chat with the current model/reasoning |
 | `/sessions`               | Create a session or return to a saved local chat or Telegram thread     |
+| `/skills`                 | Inspect available skills, descriptions, paths, and full files           |
+| `/memory`                 | Inspect saved memory, sources, timestamps, prompt inclusion, and USER.md |
 | `/agents`                 | Alias for `/sessions`                                                  |
 | `/help`                   | Show the short help notice                                             |
 | Ctrl+C / Ctrl+D           | Exit; unfinished durable work resumes on next start                    |
@@ -160,6 +162,15 @@ to do the same thing. Saved chats appear as **Session 1**, **Session 2**, and so
 Switching chats leaves any ongoing work in the previous conversation running.
 Restart reopens your last selected local chat; viewing a Telegram thread does not
 change that local startup choice. Telegram's existing main/topic routing stays intact.
+
+`/skills` and `/memory` are read-only snapshots refreshed whenever you open them.
+Type to filter, press Enter for full details, use arrows/Page Up/Page Down to scroll,
+and Esc to go back. Inspection does not call the model, execute a skill, change
+memory, or add inspected content to chat history. Memory marks the last eight
+pinned facts included on the next request separately from facts retrieved on demand.
+The profile view shows the full `USER.md` and its 2,000-character prompt limit.
+Skills show the same workspace catalog advertised to Sage; their presence does not
+mean their full instructions have been read in the current session.
 
 ## Homelab container
 
