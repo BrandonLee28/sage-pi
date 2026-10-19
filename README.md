@@ -53,7 +53,56 @@ npm start
 SQLite conversation and resumes pending work. Existing memories and responsibilities
 from the first build are preserved in `data/`.
 
-The provider stays on your supplied `http://100.94.249.19:8080/v1` llama.cpp endpoint.
+## Sage CLI
+
+Run `npm link` once in this checkout to make `sage` available on your PATH.
+Without linking, use `npm run sage -- <command>`. The launcher reads this checkout's
+`.env` and resolves relative `DATA_DIR` paths from here, even when called elsewhere.
+`sage` opens the existing Pi TUI; `sage setup` opens a small numbered setup menu
+with Sage's ASCII banner.
+
+```sh
+sage setup                 # Model, MCP servers, or diagnostics
+sage model                 # Pick from the endpoint's advertised models
+sage model MODEL_ID --url http://localhost:8080/v1
+sage model reset           # Return to .env model defaults
+sage mcp                   # Interactive add/list/remove/test menu
+sage mcp add NAME --env TOKEN_ENV -- COMMAND ARGUMENTS
+sage mcp add NAME --url https://your-server/mcp --token-env TOKEN_ENV
+sage mcp list
+sage mcp test NAME          # Connect/list tools; never calls a tool
+sage mcp remove NAME
+sage doctor                # Check config, data access, and model discovery
+sage --help
+```
+
+Settings are saved atomically to `DATA_DIR/settings.json`; `.env`, conversations,
+and workspace instructions are preserved. CLI model settings override `LLM_MODEL`
+and `LLM_BASE_URL`. Explicit model IDs can be saved while offline; `sage doctor`
+checks whether the server advertises the selection. Restart Sage after a change.
+A new CLI selection applies to existing main and Telegram conversations once;
+later native `/model` choices remain saved until another CLI selection/reset.
+Endpoint and API key settings must match; `LLM_API_KEY` stays in `.env`/environment.
+
+MCP uses the [official TypeScript SDK](https://ts.sdk.modelcontextprotocol.io/client)
+for stdio and Streamable HTTP, exposing server tools as native Pi tools named
+`mcp__NAME__TOOL`. MCP adds one concrete dependency; Pi still owns validation,
+execution, cancellation, output limits, and recovery. Calls are never automatically
+replayed after a crash. Adding a server saves configuration; startup and
+`sage mcp test NAME` run the configured executable/connect to its URL. Stdio commands
+run in `DATA_DIR/workspace`, with the local `node_modules/.bin` on PATH. Use absolute
+paths for scripts outside that workspace. Server logs appear during the explicit
+connection test, and stay out of the conversation TUI.
+
+`--env` is repeatable and passes only named environment variables in addition to
+the SDK's basic process environment. `--token-env` reads an HTTP bearer token by
+name. Store secret values in `.env`/environment, not command arguments or URLs.
+The current MCP bridge supports tools, text, images, and embedded text resources;
+it does not browse MCP resources/prompts, perform OAuth, or reconnect automatically.
+Unavailable servers produce a startup notice; test the connection and restart
+after fixing it. `sage doctor` does not launch MCP processes or call model inference.
+
+The provider defaults to your supplied `http://100.94.249.19:8080/v1` llama.cpp endpoint.
 Startup and `/model` discover the models it advertises (currently `bonsai-27b`).
 Model discovery also reads llama.cpp's `/props` modalities. Vision-enabled servers
 offer image input, using Pi's native image reader and image resizing; your current

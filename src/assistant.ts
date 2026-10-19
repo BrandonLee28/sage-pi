@@ -36,10 +36,15 @@ import { personalExtension, personalState } from "./personal.ts";
 import { webExtension } from "./web.ts";
 import { calendarExtension } from "../extensions/calendar.ts";
 import { routinesExtension } from "../extensions/routines.ts";
+import { connectMcp } from "../extensions/mcp.ts";
 import type { Config } from "./config.ts";
 
 export const context = BACKGROUND_CONTEXT;
 const USER_PROFILE_MAX_CHARS = 2000;
+const ModelChoice = defineDoc<{ revision: string | null }>({
+  kind: "sage.model-choice", version: 1, scope: "conversation",
+  history: "latest", fork: "current", initial: () => ({ revision: null }),
+});
 const TELEGRAM_REWRITE = "Rewrite your last answer as a plain-text Telegram message. " +
   "Keep the same facts, times, names, and useful details. Remove Markdown formatting and raw JSON; " +
   "use short natural sentences or one plain line per schedule item. " +
@@ -427,12 +432,27 @@ export async function openAssistant(
     const conversation = await harness.conversation(id, context);
     if (!conversation) throw new Error(`Missing conversation ${id}`);
     const saved = await harness.snapshot(AgentDoc, id, context);
-    await conversation.configure({
-      model: saved?.model && models.getModel(saved.model.provider, saved.model.modelId)
-        ? saved.model : defaultModel,
-      thinkingLevel: saved?.thinkingLevel ?? "low",
-      cwd: workspace,
+    const choice = await harness.snapshot(ModelChoice, id, context);
+    const changed = (choice?.revision ?? null) !== (config.modelRevision ?? null);
+    await conversation.commit(async (tx) => {
+      await configure(tx, id, {
+        model: !changed && saved?.model && models.getModel(saved.model.provider, saved.model.modelId)
+          ? saved.model : defaultModel,
+        thinkingLevel: saved?.thinkingLevel ?? "low",
+        cwd: workspace,
+      });
+      (await tx.doc(ModelChoice, id)).revision = config.modelRevision ?? null;
     }, context);
+  }
+  const mcp: Awaited<ReturnType<typeof connectMcp>>[] = [];
+  for (const [name, server] of Object.entries(config.mcpServers)) {
+    try {
+      const connection = await connectMcp(name, server, workspace);
+      mcp.push(connection);
+      registry.install(connection.extension);
+    } catch {
+      console.error(`[MCP] ${name} unavailable. Run sage mcp test ${name} to diagnose, then restart.`);
+    }
   }
   harness.resume();
 
@@ -452,6 +472,7 @@ export async function openAssistant(
             thinkingLevel: "low",
             cwd: workspace,
           });
+          (await tx.doc(ModelChoice, created.id)).revision = config.modelRevision ?? null;
           const route = await tx.doc(TelegramRoute, created.id);
           route.threadId = threadId;
           topics.conversations[String(threadId)] = created.id;
@@ -472,8 +493,11 @@ export async function openAssistant(
       );
     },
     async close() {
-      await harness.close(context);
-      await web.close();
+      try { await harness.close(context); }
+      finally {
+        await Promise.allSettled(mcp.map((connection) => connection.close()));
+        await web.close();
+      }
     },
   };
 }
