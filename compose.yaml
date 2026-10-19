@@ -1,0 +1,14 @@
+services:
+  agent:
+    build: .
+    restart: unless-stopped
+    init: true
+    stdin_open: true
+    tty: true
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+    volumes:
+      - personal-pi:/app/data
+volumes:
+  personal-pi:

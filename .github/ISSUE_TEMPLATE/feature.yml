@@ -1,0 +1,24 @@
+name: Feature request
+description: Describe one outcome you want Sage to support.
+title: "Feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What should happen?
+      description: Describe the result you want in plain language.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: How will we know it works?
+      description: Give an example or a few acceptance criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or preferences
+      description: Optional services, boundaries, or decisions the agent should ask you about. Never include secrets.

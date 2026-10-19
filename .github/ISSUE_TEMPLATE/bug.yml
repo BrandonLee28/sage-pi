@@ -1,0 +1,17 @@
+name: Bug report
+description: Describe a specific behavior that needs fixing.
+title: "Bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: What happened, and how can we reproduce it?
+      description: Include the steps, expected result, and actual result. Remove credentials and private conversation content.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Node version, operating system, terminal or Telegram, and relevant configuration without secrets.
