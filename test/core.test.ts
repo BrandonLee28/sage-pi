@@ -16,7 +16,7 @@ import { agentOf, tuiAdapter } from "../src/tui-adapter.ts";
 import { localModels, singleStream } from "../src/model.ts";
 import { telegramGateway } from "../src/telegram.ts";
 import { Api, Bot } from "grammy";
-import { getCurrentSystemPrompt, normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
+import { getCurrentSystemPrompt, getCurrentTools, normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 
 async function fixture() {
   const dataDir = await mkdtemp(join(tmpdir(), "personal-pi-test-"));
@@ -84,12 +84,16 @@ test("Telegram texting instructions cover replies, files, scheduled check-ins, a
   await writeFile(agentsPath, customInstructions);
   const send = async () => {};
   let assistant = await f.open(send);
+  const stylePath = join(workspace, "TELEGRAM.md");
+  let style = await readFile(new URL("../instructions/TELEGRAM.md", import.meta.url), "utf8");
   const assertStyle = async (conversation = assistant.root) => {
     const prompt = getCurrentSystemPrompt((await conversation.context(context)).messages);
     assert.ok(prompt.includes(customInstructions));
     assert.ok(prompt.includes("<telegram_reply_style>"));
+    assert.ok(prompt.includes(style));
   };
   try {
+    assert.equal(await readFile(stylePath, "utf8"), style);
     f.faux.setResponses([
       fauxAssistantMessage("Hey, what's up?"),
       fauxAssistantMessage(fauxToolCall("write", { path: "report.md", content: "# Report\n\n**Complete.**\n" }), { stopReason: "toolUse" }),
@@ -100,6 +104,8 @@ test("Telegram texting instructions cover replies, files, scheduled check-ins, a
     ]);
     await (await assistant.submit("Hello.", undefined, true)).wait(context);
     await assertStyle();
+    style += "\nCustom voice: keep it straightforward.\n";
+    await writeFile(stylePath, style);
     const topic = await assistant.telegramConversation(46);
     await (await assistant.submit("Save a Markdown report.", undefined, true, true, topic)).wait(context);
     await assertStyle(topic);
@@ -110,6 +116,7 @@ test("Telegram texting instructions cover replies, files, scheduled check-ins, a
     await assistant.close();
     assistant = await f.open(send);
     assert.equal(await readFile(agentsPath, "utf8"), customInstructions);
+    assert.equal(await readFile(stylePath, "utf8"), style);
     const restoredTopic = await assistant.telegramConversation(46);
     assert.equal(restoredTopic.id, topic.id);
     await (await assistant.submit("Hello again.", undefined, true, true, restoredTopic)).wait(context);
@@ -121,6 +128,68 @@ test("Telegram texting instructions cover replies, files, scheduled check-ins, a
     await (await assistant.submit("Terminal only.", undefined, false, true, terminalTopic)).wait(context);
     const prompt = getCurrentSystemPrompt((await terminalTopic.context(context)).messages);
     assert.ok(!prompt.includes("<telegram_reply_style>"));
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("Telegram rewrites a formatted draft through the native loop before delivery without repeating file work", async () => {
+  const f = await fixture();
+  const sent: { text: string; threadId?: number }[] = [];
+  const assistant = await f.open(async (text, threadId) => { sent.push({ text, threadId }); });
+  try {
+    const topic = await assistant.telegramConversation(47);
+    const reply = "tomorrow you've got two meetings:\n\n2–3 pm: project check-in, room 10\n4–5 pm: design review, room 12";
+    f.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("write", { path: "schedule.md", content: "# Tomorrow\n\n**2–3 pm** project check-in\n" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Tomorrow you've got two:\n\n- **2–3 pm** — project check-in, room 10\n- **4–5 pm** — design review, room 12\n\nWant me to plan your evening?"),
+      (request) => {
+        assert.equal(getCurrentTools(request.messages).length, 0, "A wording correction cannot repeat tool actions");
+        return fauxAssistantMessage(reply);
+      },
+    ]);
+    const settled = await (await assistant.submit("Save my schedule, then tell me what's on tomorrow.",
+      undefined, true, true, topic)).wait(context);
+    assert.equal(settled.status, "done");
+    for (let i = 0; i < 100 && sent.length === 0; i++) await pause(10);
+    assert.deepEqual(sent, [{ text: reply, threadId: 47 }]);
+    assert.equal(f.faux.state.callCount, 3);
+    assert.equal(await readFile(join(assistant.workspace, "schedule.md"), "utf8"),
+      "# Tomorrow\n\n**2–3 pm** project check-in\n");
+    const view = await topic.context(context);
+    assert.equal(view.messages.filter((message) => message.role === "toolResult" && message.toolName === "write").length, 1);
+    assert.ok(JSON.stringify(view.messages).includes("This is a wording correction only"));
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("Telegram style correction is bounded, covers JSON and scheduled replies, and honors explicit inline formats", async () => {
+  const f = await fixture();
+  const assistant = await f.open(async () => {});
+  try {
+    f.faux.setResponses([
+      fauxAssistantMessage("**First draft.**"), fauxAssistantMessage("**Still formatted.**"),
+      fauxAssistantMessage('{"status":"done"}'), fauxAssistantMessage("All done."),
+      fauxAssistantMessage('{"status":"done"}'),
+      fauxAssistantMessage("# Saved report"), fauxAssistantMessage("Saved it in report.md."),
+      (request) => {
+        assert.ok(getCurrentTools(request.messages).length > 0, "Tools remain available on the next user request");
+        return fauxAssistantMessage("2–3 pm: check-in. See https://example.com/a_b?q=1&x=2");
+      },
+    ]);
+    assert.equal((await (await assistant.submit("Hello.")).wait(context)).status, "done");
+    assert.equal(f.faux.state.callCount, 2, "An uncooperative model cannot create an endless rewrite loop");
+    assert.equal((await (await assistant.submit("Scheduled check-in.", undefined, true, false)).wait(context)).status, "done");
+    assert.equal(f.faux.state.callCount, 4, "The next request gets its own correction attempt");
+    await (await assistant.submit("Reply in JSON with the status.")).wait(context);
+    assert.equal(f.faux.state.callCount, 5);
+    await (await assistant.submit("Save a Markdown report in a file.")).wait(context);
+    assert.equal(f.faux.state.callCount, 7, "A file format request does not opt chat out of plain text");
+    await (await assistant.submit("When is the check-in?")).wait(context);
+    assert.equal(f.faux.state.callCount, 8, "Plain schedules and bare URLs need no extra model request");
   } finally {
     await assistant.close();
     await f.cleanup();
