@@ -1,3 +1,5 @@
+![Sage wordmark](docs/assets/sage-logo.svg)
+
 # Sage Pi
 
 Private personal assistant built on Pi Durable, with a terminal UI and optional

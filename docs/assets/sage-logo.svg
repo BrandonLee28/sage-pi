@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="552" height="200" viewBox="0 0 552 200" role="img" aria-labelledby="title description">
+  <title id="title">Sage</title>
+  <desc id="description">Sage's block-letter terminal wordmark, in white on charcoal.</desc>
+  <!-- Vector rendering of the wordmark in src/cli-ui.ts. -->
+  <rect width="552" height="200" rx="12" fill="#282c34"/>
+  <path fill="#ffffff" d="M48 40h96v24h-96z M192 40h48v24h-48z M288 40h96v24h-96z M408 40h96v24h-96z M48 64h24v24h-24z M168 64h24v24h-24z M240 64h24v24h-24z M288 64h24v24h-24z M408 64h24v24h-24z M48 88h96v24h-96z M168 88h24v24h-24z M240 88h24v24h-24z M288 88h24v24h-24z M336 88h48v24h-48z M408 88h72v24h-72z M120 112h24v24h-24z M168 112h96v24h-96z M288 112h24v24h-24z M360 112h24v24h-24z M408 112h24v24h-24z M48 136h96v24h-96z M168 136h24v24h-24z M240 136h24v24h-24z M288 136h96v24h-96z M408 136h96v24h-96z"/>
+</svg>
