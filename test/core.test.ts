@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
@@ -69,6 +69,78 @@ test("Sage's soul enters the native prompt, refreshes live, and preserves edits 
     const topic = await assistant.telegramConversation(44);
     assert.equal((await (await assistant.submit("Hello from a topic.", undefined, false, true, topic)).wait(context)).status, "done");
     assert.ok(getCurrentSystemPrompt((await topic.context(context)).messages).includes(customSoul));
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("USER.md is seeded, refreshes across conversations, and preserves edits on restart", async () => {
+  const f = await fixture();
+  let assistant = await f.open();
+  const profilePath = join(assistant.workspace, "USER.md");
+  const prompt = async () => getCurrentSystemPrompt((await assistant.root.context(context)).messages);
+  try {
+    assert.equal(await readFile(profilePath, "utf8"),
+      await readFile(new URL("../instructions/USER.md", import.meta.url), "utf8"));
+    f.faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage("Hello.")));
+    const original = "# User\nPreferred name: Test User.\nUse one clear next action.";
+    await writeFile(profilePath, original);
+    assert.equal((await (await assistant.submit("Hello.")).wait(context)).status, "done");
+    assert.ok((await prompt()).includes(original));
+
+    const updated = "# User\nPreferred name: Test User.\nUse short numbered steps.";
+    await writeFile(profilePath, updated);
+    assert.equal((await (await assistant.submit("Hello again.")).wait(context)).status, "done");
+    assert.ok((await prompt()).includes(updated));
+    assert.ok(!(await prompt()).includes(original));
+    const topic = await assistant.telegramConversation(45);
+    assert.equal((await (await assistant.submit("Hello from a topic.", undefined, false, true, topic)).wait(context)).status, "done");
+    assert.ok(getCurrentSystemPrompt((await topic.context(context)).messages).includes(updated));
+
+    await assistant.close();
+    assistant = await f.open();
+    assert.equal(await readFile(profilePath, "utf8"), updated);
+    assert.equal((await (await assistant.submit("Still here.")).wait(context)).status, "done");
+    assert.ok((await prompt()).includes(updated));
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("USER.md bounds prompt text without changing the file, and allows empty or missing profiles", async () => {
+  const f = await fixture();
+  const workspace = join(f.config.dataDir, "workspace");
+  const profilePath = join(workspace, "USER.md");
+  const prefix = "# User\n" + "x".repeat(1993);
+  const full = prefix + "PROFILE_OVERFLOW_MUST_NOT_BE_AUTOLOADED";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(profilePath, full);
+  const assistant = await f.open();
+  const prompt = async () => getCurrentSystemPrompt((await assistant.root.context(context)).messages);
+  try {
+    // Opening an existing workspace must preserve even an oversized profile.
+    assert.equal(await readFile(profilePath, "utf8"), full);
+    f.faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage("OK.")));
+    assert.equal((await (await assistant.submit("Hello.")).wait(context)).status, "done");
+    assert.ok((await prompt()).includes(prefix));
+    assert.ok((await prompt()).includes("[USER.md truncated to 2,000 characters."));
+    assert.ok(!(await prompt()).includes("PROFILE_OVERFLOW_MUST_NOT_BE_AUTOLOADED"));
+    assert.equal(await readFile(profilePath, "utf8"), full);
+
+    await writeFile(profilePath, " \n");
+    assert.equal((await (await assistant.submit("Empty profile.")).wait(context)).status, "done");
+    assert.ok(!(await prompt()).includes("<user_profile>"));
+    await rm(profilePath);
+    assert.equal((await (await assistant.submit("Missing profile.")).wait(context)).status, "done");
+    assert.ok(!(await prompt()).includes("<user_profile>"));
+
+    // The exact boundary fits without a truncation notice.
+    await writeFile(profilePath, prefix);
+    assert.equal((await (await assistant.submit("Restored profile.")).wait(context)).status, "done");
+    assert.ok((await prompt()).includes(prefix));
+    assert.ok(!(await prompt()).includes("[USER.md truncated"));
   } finally {
     await assistant.close();
     await f.cleanup();
