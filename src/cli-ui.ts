@@ -151,6 +151,8 @@ export class SagePicker implements Component, Focusable {
   private title: string;
   private items: SelectItem[];
   private description: string;
+  private height?: () => number;
+  private maxVisible = 6;
   onSelect?: (value: string) => void;
   onCancel?: () => void;
   constructor(title: string, items: SelectItem[], description = "", selected?: string) {
@@ -162,9 +164,10 @@ export class SagePicker implements Component, Focusable {
   }
   get focused() { return this.input.focused; }
   set focused(value: boolean) { this.input.focused = value; }
+  setHeight(height: () => number) { this.height = height; }
   invalidate() { this.input.invalidate(); this.list.invalidate(); }
   private build(items: SelectItem[]) {
-    const list = new SelectList(items, 6, {
+    const list = new SelectList(items, this.maxVisible, {
       selectedPrefix: () => theme.fg("text", "› "),
       selectedText: (value) => theme.fg("text", theme.bold(value)),
       description: (value) => theme.fg("muted", value),
@@ -187,6 +190,14 @@ export class SagePicker implements Component, Focusable {
     this.list = this.build(filtered);
   }
   render(width: number): string[] {
+    const maxVisible = this.height ? Math.max(1, Math.min(6, this.height() - 5)) : 6;
+    if (maxVisible !== this.maxVisible) {
+      const selected = this.list.getSelectedItem()?.value;
+      this.maxVisible = maxVisible;
+      const items = fuzzyFilter(this.items, this.input.getValue(), (item) => `${item.label} ${item.description ?? ""}`);
+      this.list = this.build(items);
+      this.list.setSelectedIndex(Math.max(0, items.findIndex((item) => item.value === selected)));
+    }
     const inner = Math.max(1, width - 2);
     const line = theme.fg("borderMuted", "─".repeat(inner));
     const rows = this.list.render(inner).map((row) => {
@@ -195,9 +206,13 @@ export class SagePicker implements Component, Focusable {
       const padded = row + " ".repeat(Math.max(0, inner - visibleWidth(row)));
       return " " + (selected ? theme.bg("selectedBg", padded) : theme.fg("muted", padded));
     });
+    const heading = [" " + theme.bold(this.title), ...(this.description ? [" " + theme.fg("muted", this.description)] : [])];
+    if (this.height) return [
+      ...heading, ...this.input.render(inner).map((row) => " " + row),
+      ...rows, " " + theme.fg("dim", "↑↓ navigate · enter select · esc back"),
+    ].map((row) => truncateToWidth(row, Math.max(1, width)));
     return [
-      " " + theme.bold(this.title),
-      ...(this.description ? [" " + theme.fg("muted", this.description)] : []), "",
+      ...heading, "",
       " " + line, ...this.input.render(inner).map((row) => " " + row), " " + line, "",
       ...rows, "", " " + theme.fg("dim", "↑↓ navigate · enter select · esc cancel"), "",
     ].map((row) => truncateToWidth(row, Math.max(1, width)));

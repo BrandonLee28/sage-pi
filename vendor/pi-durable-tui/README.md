@@ -23,13 +23,17 @@ Local adaptations:
   Its protected border-rendering hooks retain working/scroll status while removing
   the horizontal rules. Editing, mouse coordinates, history, paste, and completion
   remain native; the four-column input padding reserves space for the prompt.
-- Offer the existing slash commands through Pi's native autocomplete and hide an
-  empty task panel. Editor, message/tool rendering, and execution stay upstream.
+- Offer the existing slash commands through Pi's native autocomplete. Enter and
+  Alt+Enter share command dispatch. Keep the task graph opt-in through `/tasks`
+  and label sleeping routines as waiting for their next scheduled run.
+  Editor, message/tool rendering, and execution stay upstream.
 - Add `/new` and a **New session** row to the session picker (`/sessions`, with
   `/agents` retained). The app adapter creates native Pi conversations and stores
   their local navigation index/selection in a native session document.
-- Add `/skills` and `/memory` as native read-only overlays: a shared picker and
-  plain-text detail viewer. Data is read on opening through the app adapter;
+- Add `/skills` and `/memory` as read-only panels in the bottom input area: a
+  shared picker and plain-text detail viewer, bounded to half the terminal height.
+  All chat pickers use this compact dock layout; setup keeps its full menu layout.
+  Data is read on opening through the app adapter;
   inspection does not enter the model transcript or invoke tools.
 
 See [Prime design provenance](../prime-design/README.md) for the reference and license.

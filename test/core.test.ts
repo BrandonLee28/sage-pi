@@ -455,6 +455,8 @@ test("upstream TUI adapter submits, renders saved state, and reports native erro
       ),
     );
     assert.equal(adapter.source.current().models[0].modelId, "faux-1");
+    assert.equal(adapter.source.current().tasks, undefined);
+    await adapter.controller.toggleTasks();
     assert.ok(adapter.source.current().tasks);
     await adapter.controller.toggleTasks();
     assert.equal(adapter.source.current().tasks, undefined);

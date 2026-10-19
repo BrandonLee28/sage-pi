@@ -49,3 +49,24 @@ test("Pi picker navigation, filtering, current selection, and cancellation work"
   picker.handleInput("\x03");
   assert.equal(cancelled, 2);
 });
+
+test("bottom command pickers fit their height and retain filtered selection on resize", () => {
+  const picker = new SagePicker("Sessions", Array.from({ length: 20 }, (_, index) => ({ value: String(index), label: `Session ${index}` })), "Choose a saved chat", "15");
+  let height = 12;
+  let selected: string | undefined;
+  picker.setHeight(() => height);
+  picker.onSelect = (value) => { selected = value; };
+  for (const nextHeight of [12, 9, 6, 12]) {
+    height = nextHeight;
+    const screen = picker.render(40);
+    assert.ok(screen.length <= height);
+    assert.match(stripTerminalSequences(screen.join("\n")), /› Session 15/);
+    picker.handleInput("\r");
+    assert.equal(selected, "15");
+  }
+  picker.handleInput("Session 19");
+  height = 9;
+  assert.match(stripTerminalSequences(picker.render(40).join("\n")), /› Session 19/);
+  picker.handleInput("\r");
+  assert.equal(selected, "19");
+});

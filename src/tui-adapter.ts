@@ -61,7 +61,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
   const tasks = await assistant.harness.taskGraph(context);
   const listeners = new Set<() => void>();
   const notices: DurableView["notices"] = [];
-  let showTasks = true;
+  let showTasks = false;
   const changed = () => {
     for (const listener of listeners) listener();
   };

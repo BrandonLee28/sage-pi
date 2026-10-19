@@ -127,7 +127,7 @@ export class DurableTui {
 			{ name: "model", description: "Choose a model" },
 			{ name: "agents", description: "Switch conversation" },
 			{ name: "compact", description: "Compact conversation context" },
-			{ name: "tasks", description: "Show or hide running tasks" },
+			{ name: "tasks", description: "Show or hide background task details" },
 			{ name: "help", description: "Show shortcuts" },
 		], cwd));
 		this.#editor.onSubmit = handlers.submit;
@@ -206,6 +206,7 @@ export class DurableTui {
 	}
 
 	mount(component: Component): void {
+		if (component instanceof SagePicker) component.setHeight(() => this.#panelHeight());
 		this.#editorContainer.clear();
 		this.#editorContainer.addChild(component);
 		this.#ui.setFocus(component);
@@ -216,18 +217,22 @@ export class DurableTui {
 		this.mount(this.#editor);
 	}
 
+	#panelHeight(): number {
+		return Math.max(6, Math.floor(this.#ui.terminal.rows / 2));
+	}
+
 	showInspection(data: Inspection): void {
 		const picker = new SagePicker(data.title, data.items, data.description);
-		const list = this.#ui.showOverlay(picker, { width: "100%", maxHeight: "100%", margin: 1 });
-		picker.onCancel = () => list.hide();
+		picker.onCancel = () => this.restoreEditor();
 		picker.onSelect = (value) => {
 			const item = data.items.find((item) => item.value === value);
 			if (!item) return;
-			const details = new SageDetails(item.label, item.body, () => Math.max(6, this.#ui.terminal.rows - 2));
-			const detail = this.#ui.showOverlay(details, { width: "100%", maxHeight: "100%", margin: 1 });
-			details.onBack = () => detail.hide();
-			details.onClose = () => { detail.hide(); list.hide(); };
+			const details = new SageDetails(item.label, item.body, () => this.#panelHeight());
+			details.onBack = () => this.mount(picker);
+			details.onClose = () => this.restoreEditor();
+			this.mount(details);
 		};
+		this.mount(picker);
 	}
 
 	apply(view: DurableView): void {
@@ -468,11 +473,13 @@ export class DurableTui {
 function describeTask(node: TaskGraphNode): string {
 	const state = node.state;
 	const status =
-		state.status === "waiting"
-			? `waiting on ${state.on.join(", ")}`
-			: state.status === "completing"
-				? `completing (${state.outcome})`
-				: `${state.status} ${state.phase}`;
+		node.kind === "personal.routine" && state.status === "running" && state.phase === "wait"
+			? "waiting for next scheduled run"
+			: state.status === "waiting"
+				? `waiting on ${state.on.join(", ")}`
+				: state.status === "completing"
+					? `completing (${state.outcome})`
+					: `${state.status} ${state.phase}`;
 	const flags = [node.background ? "background" : "", node.abortRequested ? "aborting" : ""].filter(Boolean);
 	const owned = node.conversations.length > 0 ? ` owns conversation ${node.conversations.join(", ")}` : "";
 	return `${node.kind} #${node.id}: ${status}${flags.length > 0 ? ` [${flags.join(", ")}]` : ""}${owned}`;
@@ -523,6 +530,7 @@ export async function runDurableTui(
 	source: DurableViewSource,
 	controller: DurableController,
 	settings: SettingsManager,
+	terminal: Terminal = new ProcessTerminal(),
 ): Promise<void> {
 	setCapabilityOverrides(settings.getTerminalCapabilityOverrides());
 	// Register Sage's palette through Pi's native theme controller.
@@ -578,27 +586,28 @@ export async function runDurableTui(
 		view.mount(selector);
 	};
 
+	const submit = (text: string, mode: "steer" | "followUp") => {
+		const trimmed = text.trim();
+		if (!trimmed) return;
+		if (trimmed === "/model") return selectModel();
+		if (trimmed === "/skills" || trimmed === "/memory") return void inspect(trimmed === "/skills" ? "skills" : "memory");
+		if (trimmed === "/new") return void controller.newSession();
+		if (trimmed === "/tasks") return void controller.toggleTasks();
+		if (trimmed === "/sessions" || trimmed === "/agents") return selectConversation();
+		if (trimmed === "/compact" || trimmed.startsWith("/compact ")) {
+			const instructions = trimmed.slice("/compact".length).trim();
+			return void controller.compact(instructions || undefined);
+		}
+		void controller.submit(trimmed, mode);
+	};
 	view = new DurableTui(source.current().session.cwd, {
-		submit: (text) => {
-			const trimmed = text.trim();
-			if (!trimmed) return;
-			if (trimmed === "/model") return selectModel();
-			if (trimmed === "/skills" || trimmed === "/memory") return void inspect(trimmed === "/skills" ? "skills" : "memory");
-			if (trimmed === "/new") return void controller.newSession();
-			if (trimmed === "/tasks") return void controller.toggleTasks();
-			if (trimmed === "/sessions" || trimmed === "/agents") return selectConversation();
-			if (trimmed === "/compact" || trimmed.startsWith("/compact ")) {
-				const instructions = trimmed.slice("/compact".length).trim();
-				return void controller.compact(instructions || undefined);
-			}
-			void controller.submit(trimmed, "steer");
-		},
-		followUp: (text) => void controller.submit(text, "followUp"),
+		submit: (text) => submit(text, "steer"),
+		followUp: (text) => submit(text, "followUp"),
 		abort: () => void controller.abort(),
 		exit,
 		selectModel,
 		cycleThinking: () => void controller.cycleThinking(),
-	});
+	}, terminal);
 
 	// pi's theme handling: the theme setting (also light/dark pairs) resolved against the terminal's reported colors.
 	const themes = new InteractiveThemeController(view.ui, {

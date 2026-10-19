@@ -163,7 +163,8 @@ Switching chats leaves any ongoing work in the previous conversation running.
 Restart reopens your last selected local chat; viewing a Telegram thread does not
 change that local startup choice. Telegram's existing main/topic routing stays intact.
 
-`/skills` and `/memory` are read-only snapshots refreshed whenever you open them.
+Slash-command suggestions and menus live in the bottom input area. `/skills` and
+`/memory` open read-only snapshots there, refreshed whenever you open them.
 Type to filter, press Enter for full details, use arrows/Page Up/Page Down to scroll,
 and Esc to go back. Inspection does not call the model, execute a skill, change
 memory, or add inspected content to chat history. Memory marks the last eight
@@ -171,6 +172,10 @@ pinned facts included on the next request separately from facts retrieved on dem
 The profile view shows the full `USER.md` and its 2,000-character prompt limit.
 Skills show the same workspace catalog advertised to Sage; their presence does not
 mean their full instructions have been read in the current session.
+
+The task graph is hidden at startup; `/tasks` shows or hides it. Background
+`personal.routine` entries waiting for their next scheduled run are durable timers.
+Hiding the panel leaves those schedules running.
 
 ## Homelab container
 
