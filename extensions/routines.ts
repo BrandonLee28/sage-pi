@@ -81,13 +81,14 @@ export function routinesExtension(options: {
       return "Use routine for recurring work the user delegates, including requests in ordinary conversation. " +
         "Translate natural language into a five-field cron and the user's timezone; ask only when timing or scope is unclear. " +
         "Use clock first, reuse stable IDs, and confirm the schedule/timezone/next run from the tool result. " +
-        "Never claim a routine exists until saved. Routines automatically repeat, survive restart, and reply to their original topic. " +
+        "Never claim a routine exists until saved. Routines automatically repeat and survive restart. " +
+        "Save the user's delivery preference in instructions; each run chooses TUI, Telegram in the original topic, or [SILENT]. " +
         "Do not create routines unrelated to delegated work. Pause/delete stops future runs; work already admitted may need /stop.\n" +
         JSON.stringify(Object.values(state?.items ?? {}).slice(-20).map(display));
     })],
     tools: [defineTool({
       name: "routine",
-      description: "Create, change, list, pause, resume, or delete shared recurring routines. Five-field cron uses an IANA timezone (default user's timezone). Native durable timers repeat without model rescheduling; original conversation receives results. Reuse IDs when changing a routine.",
+      description: "Create, change, list, pause, resume, or delete shared recurring routines. Five-field cron uses an IANA timezone (default user's timezone). Native durable timers repeat without model rescheduling. Save delivery preferences in instructions; each run chooses TUI, Telegram, or [SILENT]. Reuse IDs when changing a routine.",
       parameters: Type.Object({
         action: Type.Union(["save", "list", "pause", "resume", "delete"].map((s) => Type.Literal(s))),
         id: Type.Optional(Type.String({ pattern: "^[a-z0-9][a-z0-9/_-]{0,159}$" })),

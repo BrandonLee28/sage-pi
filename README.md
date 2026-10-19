@@ -297,8 +297,19 @@ IANA timezone, defaults to your configured timezone, and confirms the next local
 It asks when your timing or scope is unclear. You do not need to write cron yourself.
 
 Pi owns the sleeps, persistence, and recovery. [cron-parser](https://github.com/harrisiirak/cron-parser)
-calculates occurrences and handles timezone/daylight-saving rules. Each run replies
-to the conversation/topic where the routine was created, even if you edit it elsewhere.
+calculates occurrences and handles timezone/daylight-saving rules. Each run executes
+in the conversation/topic where the routine was created, even if you edit it elsewhere.
+Sage chooses delivery from the saved instructions and result: `[TUI]` shows the update
+in that terminal conversation, `[TELEGRAM]` sends it to your phone in the original
+topic, and `[SILENT]` produces no user-facing message. Morning briefings and useful
+proactive updates should use Telegram when configured; nothing useful to report can
+be silent. Ask for a particular destination when creating or editing the routine;
+Sage saves that preference in its instructions. The same choices apply to commitment
+check-ins. The full run stays in Pi storage for inspection; the TUI shows only final
+updates routed to it, keeping scheduled prompts, drafts, and tool progress quiet. Markers are
+removed from delivered updates. Unmarked answers retain the previous default:
+Telegram when configured, otherwise TUI. An explicit Telegram choice stays pending
+across restarts if the sender is unavailable; retries resume when it is available.
 A routine waits for its current run to finish before scheduling another. After
 downtime, it performs one overdue run and then skips missed slots, avoiding a backlog.
 The next run is scheduled even if the model request settles unanswered; the routine's
