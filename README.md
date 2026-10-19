@@ -131,16 +131,34 @@ recurring routines use native durable tasks that automatically schedule the next
 | Change                        | Where                                               |
 | ----------------------------- | --------------------------------------------------- |
 | Sage's personality and voice  | `data/workspace/SOUL.md`                            |
+| User profile and preferences  | `data/workspace/USER.md`                            |
 | Agent instructions            | `data/workspace/AGENTS.md`                          |
 | Skills                        | `data/workspace/skills/<name>/SKILL.md`             |
 | Add tools/hooks/tasks         | Native Pi extension `.ts` files under `extensions/` |
 | Model and service connections | `.env`                                              |
 
-`SOUL.md` defines Sage's personality; `AGENTS.md` defines how it works.
-Both files and skill descriptions refresh before the next model request, across
+`SOUL.md` defines Sage's personality; `USER.md` describes you; `AGENTS.md` defines how it works.
+These files and skill descriptions refresh before the next model request, across
 the TUI and every Telegram thread.
 `instructions/` contains first-run templates; startup preserves existing workspace
 edits. See [extensions/README.md](extensions/README.md) for a native Pi tool example.
+
+Keep `USER.md` to a few user-confirmed facts: preferred name, communication needs,
+enduring goals, and useful constraints. The template contains no personal facts.
+Edit it yourself or explicitly ask Sage to update it. The new template is also
+copied into existing workspaces when missing; existing files are never overwritten.
+Existing runtime `AGENTS.md` files stay untouched, so add the profile guidance from
+`instructions/AGENTS.md` yourself if you want it in an older workspace.
+
+The profile occupies context on every request. Only its first 2,000 characters
+(JavaScript string length, not a token count) are automatically included, plus a
+short notice when truncated. The full file stays intact and can be read with the
+native `read` tool when relevant. Empty or missing profiles add no profile section.
+Keep the most useful facts first and use memory for details, avoiding duplicate
+pinned facts. Pi refreshes the same prompt section instead of appending the profile
+as a new chat message each turn. Profile edits can still accumulate system changes
+in history until compaction; stable text helps provider caching but still uses context.
+This cap covers the profile, not the other instruction, memory, or task sections.
 
 ## Recall
 
