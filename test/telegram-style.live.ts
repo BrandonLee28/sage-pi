@@ -25,7 +25,7 @@ try {
     "i'll do the reading after lunch tomorrow instead. then the project check-in, design review, " +
       "errands on the way home and dinner. on tuesday i'll start earlier. does that work?",
   ]) {
-    const settled = await (await assistant.submit(prompt)).wait(context);
+    const settled = await (await assistant.submit(prompt, undefined, true)).wait(context);
     assert.equal(settled.status, "done", JSON.stringify(settled));
     const messages = (await assistant.root.context(context)).messages;
     const answer = messages.findLast((message) => message.role === "assistant");

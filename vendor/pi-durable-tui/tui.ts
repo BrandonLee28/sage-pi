@@ -393,7 +393,7 @@ export class DurableTui {
 
 	#addEntry(entry: EntryRecord): void {
 		const message = entry.model?.[0];
-		if ((entry.kind === "pi.user" || entry.kind === "personal.scheduled") && message?.role === "user") {
+		if ((entry.kind === "pi.user" || entry.kind === "personal.telegram" || entry.kind === "personal.scheduled") && message?.role === "user") {
 			this.#chat.addChild(new Spacer(1));
 			this.#chat.addChild(new UserMessageComponent(userText(message.content)));
 		} else if (entry.kind === "pi.assistant" && message?.role === "assistant") {

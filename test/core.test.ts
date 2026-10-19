@@ -139,6 +139,111 @@ test("Telegram texting instructions cover replies, files, scheduled check-ins, a
   }
 });
 
+test("Telegram delivery rules do not affect TUI replies in main, local sessions, or Telegram topics", async () => {
+  const f = await fixture();
+  const sent: string[] = [];
+  let assistant = await f.open(async (text) => { sent.push(text); });
+  const draft = "# Detailed answer\n\n**Keep this formatting.**\n" + "Useful detail. ".repeat(50);
+  const assertTuiRequest = (request: { messages: Parameters<typeof getCurrentSystemPrompt>[0] }) => {
+    const prompt = getCurrentSystemPrompt(request.messages);
+    assert.ok(!prompt.includes("<telegram_reply_style>"));
+    assert.ok(!prompt.includes("<telegram_brevity>"));
+    assert.ok(getCurrentTools(request.messages).length > 0);
+    return fauxAssistantMessage(draft);
+  };
+  try {
+    for (const conversation of [assistant.root, await assistant.createSession(assistant.root.id),
+      await assistant.telegramConversation(48)]) {
+      f.faux.setResponses([
+        assertTuiRequest,
+        (request) => {
+          assert.ok(getCurrentSystemPrompt(request.messages).includes("<telegram_reply_style>"));
+          return fauxAssistantMessage("**Telegram draft.**");
+        },
+        (request) => {
+          assert.equal(getCurrentTools(request.messages).length, 0);
+          return fauxAssistantMessage("Telegram reply.");
+        },
+        assertTuiRequest,
+      ]);
+      const adapter = await tuiAdapter(assistant, f.config);
+      try {
+        await adapter.controller.switchConversation(conversation.id);
+        const calls = f.faux.state.callCount;
+        const deliveries = sent.length;
+        await adapter.controller.submit("Explain the details.", "steer");
+        await conversation.waitForIdle(context);
+        assert.equal(f.faux.state.callCount, calls + 1, "TUI must not trigger a rewrite");
+        assert.equal(sent.length, deliveries, "TUI must not send to Telegram");
+        await (await assistant.submit("Hello from Telegram.", undefined, true, true, conversation)).wait(context);
+        for (let i = 0; i < 100 && sent.length === deliveries; i++) await pause(10);
+        assert.equal(sent.length, deliveries + 1);
+        await adapter.controller.submit("Continue here in the terminal.", "steer");
+        await conversation.waitForIdle(context);
+        assert.equal(f.faux.state.callCount, calls + 4, "Telegram gets one correction; TUI gets none");
+        const messages = (await conversation.context(context)).messages;
+        const answer = messages.findLast((message) => message.role === "assistant");
+        assert.ok(answer?.role === "assistant" && answer.content.some((part) => part.type === "text" && part.text === draft));
+      } finally { adapter.dispose(); }
+    }
+    await assistant.close();
+    assistant = await f.open(async (text) => { sent.push(text); });
+    f.faux.setResponses([assertTuiRequest]);
+    await (await assistant.submit("Terminal after restart.")).wait(context);
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("queued Telegram and TUI inputs keep their own reply rules", async () => {
+  const f = await fixture();
+  const assistant = await f.open(async () => {});
+  const draft = "**Keep this format in the terminal.**";
+  try {
+    for (const notifyFirst of [false, true]) {
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const assertStyle = (messages: Parameters<typeof getCurrentSystemPrompt>[0], telegram: boolean) => {
+        const prompt = getCurrentSystemPrompt(messages);
+        assert.equal(prompt.includes("<telegram_reply_style>"), telegram);
+        assert.equal(prompt.includes("<telegram_brevity>"), telegram);
+      };
+      f.faux.setResponses([
+        async (request) => {
+          started.resolve();
+          assertStyle(request.messages, notifyFirst);
+          await release.promise;
+          return fauxAssistantMessage(notifyFirst ? "Telegram reply." : draft);
+        },
+        (request) => {
+          assertStyle(request.messages, !notifyFirst);
+          return fauxAssistantMessage(draft);
+        },
+        (request) => {
+          assertStyle(request.messages, true);
+          assert.equal(getCurrentTools(request.messages).length, 0);
+          return fauxAssistantMessage("Telegram reply.");
+        },
+      ]);
+      const calls = f.faux.state.callCount;
+      const first = await assistant.submit("First input.", undefined, notifyFirst);
+      try {
+        await started.promise;
+        const queued = await assistant.submit("Follow-up input.", undefined, !notifyFirst, false);
+        assert.equal((await queued.status(context)).status, "queued");
+        release.resolve();
+        assert.equal((await first.wait(context)).status, "done");
+        assert.equal((await queued.wait(context)).status, "done");
+        assert.equal(f.faux.state.callCount, calls + (notifyFirst ? 2 : 3));
+      } finally { release.resolve(); }
+    }
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
 test("Telegram rewrites a formatted draft through the native loop before delivery without repeating file work", async () => {
   const f = await fixture();
   const sent: { text: string; threadId?: number }[] = [];
@@ -185,15 +290,15 @@ test("Telegram style correction is bounded, covers JSON and scheduled replies, a
         return fauxAssistantMessage("2–3 pm: check-in. See https://example.com/a_b?q=1&x=2");
       },
     ]);
-    assert.equal((await (await assistant.submit("Hello.")).wait(context)).status, "done");
+    assert.equal((await (await assistant.submit("Hello.", undefined, true)).wait(context)).status, "done");
     assert.equal(f.faux.state.callCount, 2, "An uncooperative model cannot create an endless rewrite loop");
     assert.equal((await (await assistant.submit("Scheduled check-in.", undefined, true, false)).wait(context)).status, "done");
     assert.equal(f.faux.state.callCount, 4, "The next request gets its own correction attempt");
-    await (await assistant.submit("Reply in JSON with the status.")).wait(context);
+    await (await assistant.submit("Reply in JSON with the status.", undefined, true)).wait(context);
     assert.equal(f.faux.state.callCount, 5);
-    await (await assistant.submit("Save a Markdown report in a file.")).wait(context);
+    await (await assistant.submit("Save a Markdown report in a file.", undefined, true)).wait(context);
     assert.equal(f.faux.state.callCount, 7, "A file format request does not opt chat out of plain text");
-    await (await assistant.submit("When is the check-in?")).wait(context);
+    await (await assistant.submit("When is the check-in?", undefined, true)).wait(context);
     assert.equal(f.faux.state.callCount, 8, "Plain schedules and bare URLs need no extra model request");
   } finally {
     await assistant.close();
@@ -229,13 +334,13 @@ test("Telegram shortens dense plain text, preserves existing voice files, and le
     for (let i = 0; i < 100 && sent.length === 0; i++) await pause(10);
     assert.deepEqual(sent, [brief], "Only the shortened answer is delivered");
     assert.equal(f.faux.state.callCount, 2);
-    await (await assistant.submit("Give me the full detailed plan.")).wait(context);
+    await (await assistant.submit("Give me the full detailed plan.", undefined, true)).wait(context);
     const detailed = (await assistant.root.context(context)).messages.findLast((message) => message.role === "assistant");
     assert.ok(detailed?.role === "assistant" && detailed.content.some((part) => part.type === "text" && part.text === dense),
       "Requested detail is not cut off by a transport word limit");
-    await (await assistant.submit("What should I do next?")).wait(context);
+    await (await assistant.submit("What should I do next?", undefined, true)).wait(context);
     assert.equal(f.faux.state.callCount, 6, "An overlong second draft cannot cause an endless rewrite loop");
-    await (await assistant.submit("Got it.")).wait(context);
+    await (await assistant.submit("Got it.", undefined, true)).wait(context);
     assert.equal(f.faux.state.callCount, 7, "An already brief answer needs no correction");
   } finally {
     await assistant.close();

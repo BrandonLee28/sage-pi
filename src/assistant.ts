@@ -11,10 +11,12 @@ import {
   createRegistry,
   configure,
   defineDoc,
+  defineEntry,
   defineExtension,
   defineTask,
   GenerationTask,
   Harness,
+  LiveDoc,
   hook,
   section,
   type Conversation,
@@ -54,6 +56,7 @@ const ModelChoice = defineDoc<{ revision: string | null }>({
   kind: "sage.model-choice", version: 1, scope: "conversation",
   history: "latest", fork: "current", initial: () => ({ revision: null }),
 });
+const ScheduledInput = defineEntry<{ requestId: string; telegram?: boolean }>("personal.scheduled");
 const TELEGRAM_REWRITE = "Rewrite your last answer as a plain-text Telegram message. " +
   "Keep the same facts, times, names, and useful details. Remove Markdown formatting and raw JSON; " +
   "use short natural sentences or one plain line per schedule item. " +
@@ -113,6 +116,22 @@ export async function openAssistant(
   const registry = createRegistry();
   let harness: Harness;
   let root: Conversation;
+
+  async function isTelegramReply(conversationId: ConversationId, callContext: typeof context) {
+    if (!options.sendTelegram) return false;
+    const live = await harness.snapshot(LiveDoc, conversationId, callContext);
+    // Follow the active run, not a conversation-wide flag: main and topics can also receive TUI input.
+    for (const id of live?.run?.inputs ?? []) {
+      const submission = await harness.submission(id, callContext);
+      const status = await submission?.status(callContext);
+      if (!status?.entry) continue;
+      const entryId = status.entry;
+      const entry = await harness.commit((tx) => tx.entry(entryId), callContext);
+      if (entry?.kind === "personal.telegram" ||
+          (ScheduledInput.is(entry) && entry.data?.telegram === true)) return true;
+    }
+    return false;
+  }
 
   // Delivery is a native durable task, including its wait and retry checkpoints.
   const Delivery = defineTask<
@@ -259,8 +278,8 @@ export async function openAssistant(
         requestId,
         ...(steer ? { whenBusy: "steer" as const } : {}),
         ...(!steer
-          ? { entry: { kind: "personal.scheduled", data: { requestId } } }
-          : {}),
+          ? { entry: { kind: "personal.scheduled", data: { requestId, telegram: notify } } }
+          : notify ? { entry: { kind: "personal.telegram" } } : {}),
       },
       context,
     );
@@ -326,19 +345,20 @@ export async function openAssistant(
         section("instructions_file", () =>
           readFile(join(workspace, "AGENTS.md"), "utf8"),
         ),
-        section("telegram_reply_style", () => options.sendTelegram
-          ? readFile(join(workspace, "TELEGRAM.md"), "utf8")
-          : undefined),
-        section("telegram_brevity", () => options.sendTelegram
-          ? readFile(join(workspace, "TELEGRAM-BREVITY.md"), "utf8")
-          : undefined),
+        section("telegram_reply_style", async ({ conversationId }, callContext) =>
+          await isTelegramReply(conversationId, callContext)
+            ? readFile(join(workspace, "TELEGRAM.md"), "utf8") : undefined),
+        section("telegram_brevity", async ({ conversationId }, callContext) =>
+          await isTelegramReply(conversationId, callContext)
+            ? readFile(join(workspace, "TELEGRAM-BREVITY.md"), "utf8") : undefined),
         section("skills", async () => {
           const skills = await readSkills(workspace);
           return `Read a relevant SKILL.md before using it. Skills are maintained by the user. Do not create, edit, or delete skills unless the user explicitly asks.\n${skills.map((skill) => `${skill.path}: ${skill.description}`).join("\n")}`;
         }),
       ],
       hooks: options.sendTelegram ? [hook(GenerationTask, {
-        beforeRequest: (request) => {
+        beforeRequest: async (request, api, callContext) => {
+          if (!await isTelegramReply(api.conversationId, callContext)) return;
           const content = request.messages.findLast((message) => message.role === "user")?.content;
           if (content !== TELEGRAM_REWRITE && content !== TELEGRAM_SHORTEN) return;
           // This request may only reword the completed answer; it cannot repeat an external action.
@@ -348,6 +368,7 @@ export async function openAssistant(
           }] };
         },
         onYield: async (answer, api, callContext) => {
+          if (!await isTelegramReply(api.conversationId, callContext)) return;
           const text = answer.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
           let structured = false;
           try { const value = JSON.parse(text); structured = value !== null && typeof value === "object"; }
