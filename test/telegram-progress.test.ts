@@ -14,7 +14,7 @@ import { telegramProgress } from "../src/telegram-progress.ts";
 
 test("Telegram progress reflects native work, elapsed inactivity, completion, and never exposes source contents", async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-progress-"));
-  const config = { ...readConfig(), dataDir, enableShell: false, telegramToken: "", telegramChat: "",
+  const config = { ...readConfig(), dataDir, mcpServers: {}, enableShell: false, telegramToken: "", telegramChat: "",
     appleId: "", appleAppPassword: "", appleCalendarUrl: "", searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "" };
   const faux = fauxProvider(), models = createModels(); models.setProvider(faux.provider);
   const assistant = await openAssistant(config, { models, model: { provider: "faux", modelId: "faux-1" } });

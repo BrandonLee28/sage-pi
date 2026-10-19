@@ -12,6 +12,8 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { context, openAssistant } from "../src/assistant.ts";
 import { readConfig } from "../src/config.ts";
+import { Index, MemoryRecords } from "../src/personal.ts";
+import { Routines } from "../extensions/routines.ts";
 import { agentOf, tuiAdapter } from "../src/tui-adapter.ts";
 import { localModels, singleStream } from "../src/model.ts";
 import { telegramGateway } from "../src/telegram.ts";
@@ -23,6 +25,7 @@ async function fixture() {
   const config = {
     ...readConfig(),
     dataDir,
+    mcpServers: {},
     enableShell: false,
     telegramToken: "",
     telegramChat: "",
@@ -454,6 +457,8 @@ test("upstream TUI adapter submits, renders saved state, and reports native erro
       ),
     );
     assert.equal(adapter.source.current().models[0].modelId, "faux-1");
+    assert.equal(adapter.source.current().tasks, undefined);
+    await adapter.controller.toggleTasks();
     assert.ok(adapter.source.current().tasks);
     await adapter.controller.toggleTasks();
     assert.equal(adapter.source.current().tasks, undefined);
@@ -479,6 +484,152 @@ test("upstream TUI adapter submits, renders saved state, and reports native erro
     await assistant.close();
     await f.cleanup();
   }
+});
+
+test("new TUI sessions isolate history, keep model preferences, and restore across restart", async () => {
+  const f = await fixture();
+  let assistant = await f.open();
+  let adapter = await tuiAdapter(assistant, f.config);
+  try {
+    f.faux.setResponses([fauxAssistantMessage("MAIN-ONLY answer."), fauxAssistantMessage("NEW-SESSION-ONLY answer.")]);
+    await adapter.controller.submit("MAIN-ONLY message", "steer");
+    await assistant.root.waitForIdle(context);
+    await adapter.controller.cycleThinking();
+    const previousAgent = agentOf(adapter.source.current().conversation);
+    const calls = f.faux.state.callCount;
+    await adapter.controller.submit("/new", "steer");
+    const fresh = adapter.source.current();
+    const id = fresh.conversation.conversation.id;
+    assert.notEqual(id, assistant.root.id);
+    assert.equal(f.faux.state.callCount, calls, "creating a session must not call the model");
+    assert.equal(fresh.conversations.find((item) => item.id === id)?.label, "Session 1");
+    assert.deepEqual(agentOf(fresh.conversation).model, previousAgent.model);
+    assert.equal(agentOf(fresh.conversation).thinkingLevel, previousAgent.thinkingLevel);
+    assert.equal(agentOf(fresh.conversation).cwd, assistant.workspace);
+    assert.doesNotMatch(JSON.stringify(fresh.conversation.entries), /MAIN-ONLY/);
+    await adapter.controller.submit("NEW-SESSION-ONLY message", "steer");
+    await assistant.harness.waitForIdle(context);
+    assert.match(JSON.stringify(adapter.source.current().conversation), /NEW-SESSION-ONLY answer/);
+    await adapter.controller.switchConversation(assistant.root.id);
+    assert.match(JSON.stringify(adapter.source.current().conversation), /MAIN-ONLY answer/);
+    assert.doesNotMatch(JSON.stringify(adapter.source.current().conversation), /NEW-SESSION-ONLY/);
+    await adapter.controller.switchConversation(id);
+    assert.match(JSON.stringify(adapter.source.current().conversation), /NEW-SESSION-ONLY/);
+    adapter.dispose();
+    await assistant.close();
+    assistant = await f.open();
+    adapter = await tuiAdapter(assistant, f.config);
+    assert.equal(adapter.source.current().conversation.conversation.id, id);
+    assert.equal(adapter.source.current().conversations.find((item) => item.id === id)?.label, "Session 1");
+    assert.match(JSON.stringify(adapter.source.current().conversation), /NEW-SESSION-ONLY answer/);
+    assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, previousAgent.thinkingLevel);
+    await adapter.controller.newSession();
+    assert.equal(adapter.source.current().conversations.length, 3);
+    assert.equal(adapter.source.current().conversations.at(-1)?.label, "Session 2");
+    assert.doesNotMatch(JSON.stringify(adapter.source.current().conversation.entries), /MAIN-ONLY|NEW-SESSION-ONLY/);
+  } finally { adapter.dispose(); await assistant.close(); await f.cleanup(); }
+});
+
+test("skills and memory inspectors read current shared state without inference or writes", async () => {
+  const f = await fixture();
+  const assistant = await f.open();
+  const skillPath = join(assistant.workspace, "skills/observer/SKILL.md");
+  const skill = "---\nname: observer\ndescription: An inspection test skill.\n---\nFull skill instructions.\n";
+  const profile = "Profile text. ".repeat(200);
+  await mkdir(join(assistant.workspace, "skills/observer"), { recursive: true });
+  await mkdir(join(assistant.workspace, "skills/unreadable"), { recursive: true });
+  await writeFile(skillPath, skill);
+  await writeFile(join(assistant.workspace, "USER.md"), profile);
+  await assistant.root.commit(async (tx) => {
+    const index = await tx.doc(Index, assistant.root.id);
+    for (let number = 0; number < 10; number++) {
+      const key = `test-${number}`;
+      await tx.doc(MemoryRecords, assistant.root.id, key, { key, text: `Fact ${number}`, source: "test fixture", pinned: number < 9, updatedAt: 1000 });
+      index.memories.push(key);
+    }
+  }, context);
+  const adapter = await tuiAdapter(assistant, f.config);
+  try {
+    const before = await assistant.personalState();
+    const entries = JSON.stringify(adapter.source.current().conversation.entries);
+    const skills = await adapter.controller.inspect("skills");
+    assert.ok(skills);
+    assert.equal(skills.items.find((item) => item.label === "observer")?.description, "An inspection test skill.");
+    assert.ok(skills.items.find((item) => item.label === "observer")?.body.includes(skill));
+    assert.match(skills.items.find((item) => item.label === "unreadable")?.description ?? "", /missing or unreadable/);
+    const memory = await adapter.controller.inspect("memory");
+    assert.ok(memory);
+    assert.match(memory.description, /10 saved · 8 included/);
+    assert.match(memory.items.find((item) => item.value === "profile")?.description ?? "", /2000 characters/);
+    assert.ok(memory.items.find((item) => item.value === "profile")?.body.includes(profile));
+    assert.match(memory.items.find((item) => item.label === "test-0")?.description ?? "", /outside the last 8/);
+    assert.match(memory.items.find((item) => item.label === "test-8")?.description ?? "", /included on next request/);
+    assert.match(memory.items.find((item) => item.label === "test-9")?.description ?? "", /retrieved on demand/);
+    assert.match(memory.items.find((item) => item.label === "test-8")?.body ?? "", /Source: test fixture[\s\S]*1970-01-01T00:00:01.000Z[\s\S]*Fact 8/);
+    assert.equal(f.faux.state.callCount, 0);
+    assert.equal(JSON.stringify(adapter.source.current().conversation.entries), entries);
+    assert.deepEqual(await assistant.personalState(), before);
+    assert.equal(await readFile(skillPath, "utf8"), skill);
+    await writeFile(skillPath, skill.replace("inspection test", "freshly updated"));
+    assert.match((await adapter.controller.inspect("skills"))?.items.find((item) => item.label === "observer")?.description ?? "", /freshly updated/);
+    await adapter.controller.newSession();
+    assert.deepEqual((await adapter.controller.inspect("memory"))?.items, memory.items);
+    f.faux.setResponses([fauxAssistantMessage("Ready.")]);
+    await adapter.controller.submit("Hello.", "steer");
+    await assistant.harness.waitForIdle(context);
+    const selected = await assistant.harness.conversation(adapter.source.current().conversation.conversation.id, context);
+    assert.ok(selected);
+    const prompt = getCurrentSystemPrompt((await selected.context(context)).messages);
+    assert.match(prompt, /skills\/observer\/SKILL.md: An freshly updated skill/);
+  } finally { adapter.dispose(); await assistant.close(); await f.cleanup(); }
+});
+
+test("schedule inspector lists shared cron routines and reminder wakes without changing them", async () => {
+  const f = await fixture();
+  const assistant = await f.open();
+  const adapter = await tuiAdapter(assistant, f.config);
+  try {
+    const empty = await adapter.controller.inspect("schedules");
+    assert.deepEqual(empty?.items, []);
+    assert.match(empty?.description ?? "", /No schedules saved/);
+    const at = Date.now() + 86400000;
+    await assistant.root.commit(async (tx) => {
+      const state = await tx.doc(Routines);
+      state.items.daily = {
+        id: "daily", title: "Daily review", instructions: "Review the saved test notes.",
+        cron: "0 9 * * *", timezone: "America/New_York", paused: false,
+        nextAt: at + 3600000, taskId: null, conversationId: assistant.root.id,
+        lastRunAt: at - 86400000, lastStatus: "done",
+      };
+      state.items.paused = { ...state.items.daily, id: "paused", title: "Paused review", paused: true, nextAt: null, lastRunAt: null, lastStatus: "not-run" };
+    }, context);
+    await assistant.saveCommitment({ id: "wake", title: "Test reminder", nextAction: "Review test data.", source: "test fixture", wakeAt: new Date(at).toISOString() });
+    await assistant.saveCommitment({ id: "due-only", title: "Due date only", dueAt: new Date(at).toISOString() });
+    await assistant.saveCommitment({ id: "cancelled", title: "Cancelled reminder", wakeAt: new Date(at).toISOString(), status: "cancelled" });
+    const beforeRoutines = await assistant.harness.snapshot(Routines, context);
+    const beforePersonal = await assistant.personalState();
+    const entries = JSON.stringify(adapter.source.current().conversation.entries);
+    const schedules = await adapter.controller.inspect("schedules");
+    assert.ok(schedules);
+    assert.match(schedules.description, /2 recurring · 1 reminders/);
+    assert.deepEqual(schedules.items.map((item) => item.value), ["reminder:wake", "routine:daily", "routine:paused"]);
+    assert.match(schedules.items[0].body, /One-time reminder: wake[\s\S]*Source: test fixture[\s\S]*Review test data/);
+    assert.ok(schedules.items[0].body.includes(new Date(at).toISOString()));
+    assert.ok(schedules.items[0].body.includes(f.config.timezone));
+    assert.match(schedules.items[1].body, /Status: Enabled\nCron: 0 9 \* \* \*\nTimezone: America\/New_York/);
+    assert.ok(schedules.items[1].body.includes(new Date(at + 3600000).toLocaleString("en-US", { timeZone: "America/New_York" })));
+    assert.match(schedules.items[1].body, /Last result: done[\s\S]*Review the saved test notes/);
+    assert.match(schedules.items[2].description, /Paused/);
+    assert.match(schedules.items[2].body, /Next run: None[\s\S]*Last run: None/);
+    assert.equal(f.faux.state.callCount, 0);
+    assert.equal(JSON.stringify(adapter.source.current().conversation.entries), entries);
+    assert.deepEqual(await assistant.harness.snapshot(Routines, context), beforeRoutines);
+    assert.deepEqual(await assistant.personalState(), beforePersonal);
+    await adapter.controller.newSession();
+    assert.deepEqual((await adapter.controller.inspect("schedules"))?.items, schedules.items);
+    await assistant.root.commit(async (tx) => { delete (await tx.doc(Routines)).items.paused; }, context);
+    assert.equal((await adapter.controller.inspect("schedules"))?.items.length, 2);
+  } finally { adapter.dispose(); await assistant.close(); await f.cleanup(); }
 });
 
 test("local-model quoted null dates clear through the native tool path", async () => {

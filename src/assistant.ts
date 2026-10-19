@@ -36,10 +36,24 @@ import { personalExtension, personalState } from "./personal.ts";
 import { webExtension } from "./web.ts";
 import { calendarExtension } from "../extensions/calendar.ts";
 import { routinesExtension } from "../extensions/routines.ts";
+import { connectMcp } from "../extensions/mcp.ts";
 import type { Config } from "./config.ts";
 
 export const context = BACKGROUND_CONTEXT;
-const USER_PROFILE_MAX_CHARS = 2000;
+export const USER_PROFILE_MAX_CHARS = 2000;
+async function readSkills(workspace: string) {
+  const folders = await readdir(join(workspace, "skills"), { withFileTypes: true });
+  return Promise.all(folders.filter((folder) => folder.isDirectory()).map(async (folder) => {
+    const path = `skills/${folder.name}/SKILL.md`;
+    let readable = true;
+    const content = await readFile(join(workspace, path), "utf8").catch(() => { readable = false; return ""; });
+    return { name: folder.name, path, content, readable, description: content.match(/^description:\s*(.+)$/m)?.[1] ?? "" };
+  }));
+}
+const ModelChoice = defineDoc<{ revision: string | null }>({
+  kind: "sage.model-choice", version: 1, scope: "conversation",
+  history: "latest", fork: "current", initial: () => ({ revision: null }),
+});
 const TELEGRAM_REWRITE = "Rewrite your last answer as a plain-text Telegram message. " +
   "Keep the same facts, times, names, and useful details. Remove Markdown formatting and raw JSON; " +
   "use short natural sentences or one plain line per schedule item. " +
@@ -62,6 +76,10 @@ export const TelegramTopics = defineDoc<{ conversations: Record<string, Conversa
   version: 1,
   scope: "session",
   initial: () => ({ conversations: {} }),
+});
+export const TuiSessions = defineDoc<{ conversations: ConversationId[]; active: ConversationId | null }>({
+  kind: "sage.tui-sessions", version: 1, scope: "session",
+  initial: () => ({ conversations: [], active: null }),
 });
 const TelegramRoute = defineDoc<{ threadId: number | null }>({
   kind: "personal.telegram-route",
@@ -315,24 +333,8 @@ export async function openAssistant(
           ? readFile(join(workspace, "TELEGRAM-BREVITY.md"), "utf8")
           : undefined),
         section("skills", async () => {
-          const folders = await readdir(join(workspace, "skills"), {
-            withFileTypes: true,
-          });
-          const skills = await Promise.all(
-            folders
-              .filter((f) => f.isDirectory())
-              .map(async (folder) => {
-                const path = `skills/${folder.name}/SKILL.md`;
-                const contents = await readFile(
-                  join(workspace, path),
-                  "utf8",
-                ).catch(() => "");
-                const description =
-                  contents.match(/^description:\s*(.+)$/m)?.[1] ?? "";
-                return `${path}: ${description}`;
-              }),
-          );
-          return `Read a relevant SKILL.md before using it. Skills are maintained by the user. Do not create, edit, or delete skills unless the user explicitly asks.\n${skills.join("\n")}`;
+          const skills = await readSkills(workspace);
+          return `Read a relevant SKILL.md before using it. Skills are maintained by the user. Do not create, edit, or delete skills unless the user explicitly asks.\n${skills.map((skill) => `${skill.path}: ${skill.description}`).join("\n")}`;
         }),
       ],
       hooks: options.sendTelegram ? [hook(GenerationTask, {
@@ -421,18 +423,41 @@ export async function openAssistant(
     context,
   );
   root = await harness.root(context);
-  await root.commit(async (tx) => { await tx.doc(TelegramTopics); }, context);
+  await root.commit(async (tx) => { await tx.doc(TelegramTopics); await tx.doc(TuiSessions); }, context);
   const topics = await harness.snapshot(TelegramTopics, context);
-  for (const id of [root.id, ...Object.values(topics?.conversations ?? {})]) {
+  const sessions = await harness.snapshot(TuiSessions, context);
+  for (const id of [root.id, ...Object.values(topics?.conversations ?? {}), ...(sessions?.conversations ?? [])]) {
     const conversation = await harness.conversation(id, context);
     if (!conversation) throw new Error(`Missing conversation ${id}`);
     const saved = await harness.snapshot(AgentDoc, id, context);
-    await conversation.configure({
-      model: saved?.model && models.getModel(saved.model.provider, saved.model.modelId)
-        ? saved.model : defaultModel,
-      thinkingLevel: saved?.thinkingLevel ?? "low",
-      cwd: workspace,
+    const choice = await harness.snapshot(ModelChoice, id, context);
+    const changed = (choice?.revision ?? null) !== (config.modelRevision ?? null);
+    await conversation.commit(async (tx) => {
+      await configure(tx, id, {
+        model: !changed && saved?.model && models.getModel(saved.model.provider, saved.model.modelId)
+          ? saved.model : defaultModel,
+        thinkingLevel: saved?.thinkingLevel ?? "low",
+        cwd: workspace,
+      });
+      (await tx.doc(ModelChoice, id)).revision = config.modelRevision ?? null;
     }, context);
+  }
+  const mcp: Awaited<ReturnType<typeof connectMcp>>[] = [];
+  for (const [name, server] of Object.entries(config.mcpServers)) {
+    try {
+      const connection = await connectMcp(name, server, workspace);
+      const registered = new Set(registry.snapshot().tools().map(({ tool }) => tool.name));
+      const collision = connection.extension.tools?.find((tool) => registered.has(tool.name));
+      if (collision) {
+        console.error(`[MCP] ${name} skipped: tool ${collision.name} is already registered. Rename this server with sage mcp and restart.`);
+        await connection.close();
+        continue;
+      }
+      mcp.push(connection);
+      registry.install(connection.extension);
+    } catch {
+      console.error(`[MCP] ${name} unavailable. Run sage mcp test ${name} to diagnose, then restart.`);
+    }
   }
   harness.resume();
 
@@ -441,6 +466,20 @@ export async function openAssistant(
     harness,
     root,
     submit,
+    async createSession(from: ConversationId) {
+      const saved = await harness.snapshot(AgentDoc, from, context);
+      if (!saved?.model) throw new Error("The current session has no configured model.");
+      return harness.createConversation({
+        ownership: { kind: "ownerless" },
+        agent: { model: saved.model, thinkingLevel: saved.thinkingLevel ?? "low", cwd: workspace },
+        init: async (tx, id) => {
+          const sessions = await tx.doc(TuiSessions);
+          sessions.conversations.push(id);
+          sessions.active = id;
+          (await tx.doc(ModelChoice, id)).revision = config.modelRevision ?? null;
+        },
+      }, context);
+    },
     async telegramConversation(threadId?: number) {
       if (threadId === undefined) return root;
       const id = await root.commit(async (tx) => {
@@ -452,6 +491,7 @@ export async function openAssistant(
             thinkingLevel: "low",
             cwd: workspace,
           });
+          (await tx.doc(ModelChoice, created.id)).revision = config.modelRevision ?? null;
           const route = await tx.doc(TelegramRoute, created.id);
           route.threadId = threadId;
           topics.conversations[String(threadId)] = created.id;
@@ -464,6 +504,7 @@ export async function openAssistant(
     },
     registry,
     workspace,
+    skills: () => readSkills(workspace),
     personalState: () => personalState(harness, context),
     async saveCommitment(value: Parameters<typeof personal.saveCommitment>[2]) {
       return root.commit(
@@ -472,8 +513,11 @@ export async function openAssistant(
       );
     },
     async close() {
-      await harness.close(context);
-      await web.close();
+      try { await harness.close(context); }
+      finally {
+        await Promise.allSettled(mcp.map((connection) => connection.close()));
+        await web.close();
+      }
     },
   };
 }

@@ -18,6 +18,7 @@ const configured = readConfig();
 const testWeb = process.argv.includes("--web");
 const config = {
   ...configured,
+  mcpServers: {},
   dataDir: await mkdtemp(join(tmpdir(), "personal-pi-live-")),
   telegramToken: "",
   telegramChat: "",

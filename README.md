@@ -1,3 +1,5 @@
+![Sage wordmark](docs/assets/sage-logo.svg)
+
 # Sage Pi
 
 Private personal assistant built on Pi Durable, with a terminal UI and optional
@@ -53,7 +55,66 @@ npm start
 SQLite conversation and resumes pending work. Existing memories and responsibilities
 from the first build are preserved in `data/`.
 
-The provider stays on your supplied `http://example.invalid:8080/v1` llama.cpp endpoint.
+## Sage CLI
+
+Run `npm link` once in this checkout to make `sage` available on your PATH.
+Without linking, use `npm run sage -- <command>`. The launcher reads this checkout's
+`.env` and resolves relative `DATA_DIR` paths from here, even when called elsewhere.
+`sage` opens the existing Pi TUI with a compact Sage wordmark and model/workspace
+header that remains visible above saved chat history. The chat composer uses a
+shaded `>` prompt with native Pi editing and a model/context tray underneath.
+`sage setup` opens the matching setup menu. Use **↑/↓** to move,
+**Enter** to select, type to filter, and **Esc** to cancel. Model and conversation
+pickers inside chat use the same design; type `/` to discover chat commands.
+The muted palette and selection bands are adapted from
+[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent), with its MIT license
+and source reference preserved in [vendor/prime-design](vendor/prime-design/README.md).
+
+```sh
+sage setup                 # Model, MCP servers, or diagnostics
+sage model                 # Pick from the endpoint's advertised models
+sage model MODEL_ID --url http://localhost:8080/v1
+sage model reset           # Return to .env model defaults
+sage mcp                   # Interactive add/list/remove/test menu
+sage mcp add NAME --env TOKEN_ENV -- COMMAND ARGUMENTS
+sage mcp add NAME --url https://your-server/mcp --token-env TOKEN_ENV
+sage mcp list
+sage mcp test NAME          # Connect/list tools; never calls a tool
+sage mcp remove NAME
+sage doctor                # Check config, data access, and model discovery
+sage --help
+```
+
+Settings are saved atomically to `DATA_DIR/settings.json`; `.env`, conversations,
+and workspace instructions are preserved. CLI model settings override `LLM_MODEL`
+and `LLM_BASE_URL`. Explicit model IDs can be saved while offline; `sage doctor`
+checks whether the server advertises the selection. Restart Sage after a change.
+A new CLI selection applies to existing main and Telegram conversations once;
+later native `/model` choices remain saved until another CLI selection/reset.
+Endpoint and API key settings must match; `LLM_API_KEY` stays in `.env`/environment.
+
+MCP uses the [official TypeScript SDK](https://ts.sdk.modelcontextprotocol.io/client)
+for stdio and Streamable HTTP, exposing server tools as native Pi tools named
+`mcp__NAME__TOOL`. MCP adds one concrete dependency; Pi still owns validation,
+execution, cancellation, output limits, and recovery. Calls are never automatically
+replayed after a crash. Adding a server saves configuration; startup and
+`sage mcp test NAME` run the configured executable/connect to its URL. Stdio commands
+run in `DATA_DIR/workspace`, with the local `node_modules/.bin` on PATH. Use absolute
+paths for scripts outside that workspace. Server logs appear during the explicit
+connection test, and stay out of the conversation TUI.
+
+MCP servers whose generated tool names collide with an installed tool are skipped
+with a startup diagnostic; rename the conflicting server and restart.
+
+`--env` is repeatable and passes only named environment variables in addition to
+the SDK's basic process environment. `--token-env` reads an HTTP bearer token by
+name. Store secret values in `.env`/environment, not command arguments or URLs.
+The current MCP bridge supports tools, text, images, and embedded text resources;
+it does not browse MCP resources/prompts, perform OAuth, or reconnect automatically.
+Unavailable servers produce a startup notice; test the connection and restart
+after fixing it. `sage doctor` does not launch MCP processes or call model inference.
+
+The provider defaults to your supplied `http://example.invalid:8080/v1` llama.cpp endpoint.
 Startup and `/model` discover the models it advertises (currently `example-model`).
 Model discovery also reads llama.cpp's `/props` modalities. Vision-enabled servers
 offer image input, using Pi's native image reader and image resizing; your current
@@ -88,12 +149,46 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | `/tasks`                  | Toggle Pi's native live task graph                                     |
 | `/compact [instructions]` | Compact while idle                                                     |
 | `/model`                  | Refresh and select models advertised by your llama.cpp server          |
-| `/agents`                 | Switch between the main conversation and Telegram thread histories     |
+| `/new`                    | Create and switch to a fresh saved chat with the current model/reasoning |
+| `/sessions`               | Create a session or return to a saved local chat or Telegram thread     |
+| `/skills`                 | Inspect available skills, descriptions, paths, and full files           |
+| `/memory`                 | Inspect saved memory, sources, timestamps, prompt inclusion, and USER.md |
+| `/schedules` or `/crons`   | Inspect recurring routines, cron expressions, and one-time reminders    |
+| `/agents`                 | Alias for `/sessions`                                                  |
 | `/help`                   | Show the short help notice                                             |
 | Ctrl+C / Ctrl+D           | Exit; unfinished durable work resumes on next start                    |
 
 Closing the local TUI stops this process. To keep the agent alive while disconnected,
 use tmux on your server or detach from the running container as described below.
+
+`/new` starts a separate native Pi conversation without clearing or copying the
+previous transcript. Workspace files, memory, tools, and responsibilities stay
+shared. Choose **+ New session** in `/sessions` (also available through `/agents`)
+to do the same thing. Saved chats appear as **Session 1**, **Session 2**, and so on.
+Switching chats leaves any ongoing work in the previous conversation running.
+Restart reopens your last selected local chat; viewing a Telegram thread does not
+change that local startup choice. Telegram's existing main/topic routing stays intact.
+
+Slash-command suggestions and menus live in the bottom input area. `/skills` and
+`/memory` open read-only snapshots there, refreshed whenever you open them.
+Type to filter, press Enter for full details, use arrows/Page Up/Page Down to scroll,
+and Esc to go back. Inspection does not call the model, execute a skill, change
+memory, or add inspected content to chat history. Memory marks the last eight
+pinned facts included on the next request separately from facts retrieved on demand.
+The profile view shows the full `USER.md` and its 2,000-character prompt limit.
+Skills show the same workspace catalog advertised to Sage; their presence does not
+mean their full instructions have been read in the current session.
+
+The task graph is hidden at startup; `/tasks` shows or hides it. Background
+`personal.routine` entries waiting for their next scheduled run are durable timers.
+Hiding the panel leaves those schedules running.
+
+`/schedules` (also `/crons`) shows Sage's recurring routines, including paused
+ones, and reminders with a scheduled wake. Select one for its cron expression,
+timezone, next run, last result, saved instructions, or reminder details. Times
+show the routine's saved timezone (the configured timezone for reminders), with
+UTC timestamps in the details. Due dates without a wake are not scheduled reminders.
+This read-only snapshot refreshes on opening and does not run or change schedules.
 
 ## Homelab container
 

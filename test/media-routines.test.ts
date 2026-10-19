@@ -20,7 +20,7 @@ import { redPng } from "./fixtures.ts";
 const png = redPng();
 async function fixture() {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-media-"));
-  const config = { ...readConfig(), dataDir, enableShell: false, telegramToken: "", telegramChat: "",
+  const config = { ...readConfig(), dataDir, mcpServers: {}, enableShell: false, telegramToken: "", telegramChat: "",
     searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "", appleId: "", appleAppPassword: "", appleCalendarUrl: "" };
   const faux = fauxProvider({ models: [{ id: "faux-1", input: ["text", "image"] }] });
   const models = createModels(); models.setProvider(faux.provider);

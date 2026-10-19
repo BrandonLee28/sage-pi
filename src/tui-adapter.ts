@@ -5,7 +5,11 @@ import type {
   ModelRef,
   TaskGraph,
 } from "@earendil-works/pi-durable";
-import { context, TelegramTopics, type Assistant } from "./assistant.ts";
+import { context, TelegramTopics, TuiSessions, USER_PROFILE_MAX_CHARS, type Assistant } from "./assistant.ts";
+import { PINNED_MEMORY_LIMIT } from "./personal.ts";
+import { Routines } from "../extensions/routines.ts";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 
@@ -26,6 +30,11 @@ export type DurableViewSource = {
   current(): DurableView;
   subscribe(listener: () => void): () => void;
 };
+export type Inspection = {
+  title: string;
+  description: string;
+  items: { value: string; label: string; description: string; body: string }[];
+};
 export type DurableController = {
   submit(text: string, whenBusy: "steer" | "followUp"): Promise<void>;
   compact(instructions: string | undefined): Promise<void>;
@@ -34,20 +43,26 @@ export type DurableController = {
   refreshModels(): Promise<void>;
   setModel(model: ModelRef): Promise<void>;
   toggleTasks(): Promise<void>;
+  newSession(): Promise<void>;
+  inspect(kind: "skills" | "memory" | "schedules"): Promise<Inspection | undefined>;
   switchConversation(id: ConversationId): Promise<void>;
 };
 export const agentOf = (view: ConversationView): AgentState =>
   (view.docs["pi.agent"] ?? {}) as AgentState;
 
 export async function tuiAdapter(assistant: Assistant, config: Config) {
-  let selected = assistant.root;
+  const sessions = await assistant.harness.documentState(TuiSessions, context);
+  if (!sessions) throw new Error("Missing TUI session index.");
+  let selected = sessions.value?.active
+    ? await assistant.harness.conversation(sessions.value.active, context) ?? assistant.root
+    : assistant.root;
   let conversation = await selected.viewState(context);
   const topics = await assistant.harness.documentState(TelegramTopics, context);
   if (!topics) throw new Error("Missing Telegram conversation index.");
   const tasks = await assistant.harness.taskGraph(context);
   const listeners = new Set<() => void>();
   const notices: DurableView["notices"] = [];
-  let showTasks = true;
+  let showTasks = false;
   const changed = () => {
     for (const listener of listeners) listener();
   };
@@ -68,6 +83,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       conversation: conversation.value,
       conversations: [
         { id: assistant.root.id, label: "main" },
+        ...(sessions.value?.conversations ?? []).map((id, index) => ({ id, label: `Session ${index + 1}` })),
         ...Object.entries(topics.value?.conversations ?? {}).map(([thread, id]) =>
           ({ id, label: `Telegram thread ${thread}` })),
       ],
@@ -99,9 +115,10 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
   const controller: DurableController = {
     submit: (text, mode) =>
       guard(async () => {
+        if (text.trim() === "/new") return controller.newSession();
         if (text.trim() === "/help") {
           notice(
-            "/tasks task graph · /compact [instructions] · /model · /agents · Esc stop · Ctrl+O expand tools · Ctrl+C exit. Ask to list memories or responsibilities.",
+            "/new new session · /sessions saved chats · /skills, /memory, /schedules (/crons) read-only inspectors · /model · /tasks task graph · /compact [instructions] · Esc stop · Ctrl+O expand tools · Ctrl+C exit.",
           );
           return;
         }
@@ -156,11 +173,78 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       showTasks = !showTasks;
       changed();
     },
+    newSession: () => guard(async () => {
+      const created = await assistant.createSession(selected.id);
+      await controller.switchConversation(created.id);
+    }),
+    inspect: async (kind) => {
+      try {
+        if (kind === "schedules") {
+          const [state, { commitments }] = await Promise.all([
+            assistant.harness.snapshot(Routines, context), assistant.personalState(),
+          ]);
+          const routines = Object.values(state?.items ?? {});
+          const reminders = commitments.filter((item) => item.wakeAt !== null);
+          const local = (at: number | null, timezone: string) => at === null ? "None" : `${new Date(at).toLocaleString("en-US", { timeZone: timezone })} (${timezone})`;
+          const utc = (at: number | null) => at === null ? "None" : new Date(at).toISOString();
+          return {
+            title: "Schedules",
+            description: `${routines.length} recurring · ${reminders.length} reminders · shared across sessions${!routines.length && !reminders.length ? " · No schedules saved" : ""}`,
+            items: [
+              ...routines.map((item) => ({
+                at: item.nextAt, value: `routine:${item.id}`, label: item.title,
+                description: item.paused ? `Paused · ${item.cron} · ${item.timezone}` : `Next ${local(item.nextAt, item.timezone)}`,
+                body: `Recurring routine: ${item.id}\nStatus: ${item.paused ? "Paused" : "Enabled"}\nCron: ${item.cron}\nTimezone: ${item.timezone}\nNext run: ${local(item.nextAt, item.timezone)}\nNext run (UTC): ${utc(item.nextAt)}\nLast run: ${local(item.lastRunAt, item.timezone)}\nLast result: ${item.lastStatus}\nConversation: ${item.conversationId}\nTask: ${item.taskId ?? "None"}\n\n${item.instructions}`,
+              })),
+              ...reminders.map((item) => ({
+                at: item.wakeAt, value: `reminder:${item.id}`, label: item.title,
+                description: `Reminder · ${item.status} · ${local(item.wakeAt, config.timezone)}`,
+                body: `One-time reminder: ${item.id}\nStatus: ${item.status}\nWake: ${local(item.wakeAt, config.timezone)}\nWake (UTC): ${utc(item.wakeAt)}\nDue (UTC): ${utc(item.dueAt)}\nSource: ${item.source}\nTask: ${item.wakeTaskId ?? "None"}\n\n${item.nextAction}`,
+              })),
+            ].sort((left, right) => (left.at ?? Infinity) - (right.at ?? Infinity))
+              .map(({ at, ...item }) => item),
+          };
+        }
+        if (kind === "skills") {
+          const skills = await assistant.skills();
+          return {
+            title: "Skills",
+            description: `${skills.filter((skill) => skill.readable).length} available · summaries advertised; full files read on demand`,
+            items: skills.map((skill) => ({
+              value: skill.path, label: skill.name,
+              description: skill.readable ? skill.description : "SKILL.md is missing or unreadable",
+              body: `${skill.path}\n\n${skill.readable ? skill.content : "Cannot read this skill file."}`,
+            })),
+          };
+        }
+        const { memories } = await assistant.personalState();
+        const included = new Set(memories.filter((memory) => memory.pinned).slice(-PINNED_MEMORY_LIMIT).map((memory) => memory.key));
+        const profile = await readFile(join(assistant.workspace, "USER.md"), "utf8").catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return "";
+          throw error;
+        });
+        return {
+          title: "Memory",
+          description: `${memories.length} saved · ${included.size} included on next request · shared across sessions`,
+          items: [{
+            value: "profile", label: "User profile", description: `USER.md · ${Math.min(profile.trim() ? profile.length : 0, USER_PROFILE_MAX_CHARS)} characters included`,
+            body: `USER.md\n\nThe first ${USER_PROFILE_MAX_CHARS.toLocaleString("en-US")} characters are included on each request. This view shows the full file.\n\n${profile || "No profile saved."}`,
+          }, ...memories.map((memory) => ({
+            value: `memory:${memory.key}`, label: memory.key,
+            description: included.has(memory.key) ? "Pinned · included on next request" : memory.pinned ? `Pinned · outside the last ${PINNED_MEMORY_LIMIT} pinned memories` : "Stored · retrieved on demand",
+            body: `Key: ${memory.key}\nPinned: ${memory.pinned ? "yes" : "no"}\nIncluded on next request: ${included.has(memory.key) ? "yes" : "no"}\nSource: ${memory.source}\nUpdated: ${new Date(memory.updatedAt).toISOString()}\n\n${memory.text}`,
+          }))],
+        };
+      } catch (error) { report(error); return undefined; }
+    },
     switchConversation: (id) => guard(async () => {
       if (!source.current().conversations.some((item) => item.id === id))
         throw new Error("Conversation is not configured.");
       const next = await assistant.harness.conversation(id, context);
       if (!next) throw new Error("Conversation is missing.");
+      if (id === assistant.root.id || sessions.value?.conversations.includes(id)) {
+        await assistant.root.commit(async (tx) => { (await tx.doc(TuiSessions)).active = id; }, context);
+      }
       const view = await next.viewState(context);
       stopConversation();
       conversation.dispose();
@@ -172,6 +256,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
   };
   let stopConversation = conversation.subscribe(changed);
   const stopTopics = topics.subscribe(changed);
+  const stopSessions = sessions.subscribe(changed);
   const stopTasks = tasks.subscribe(changed);
   return {
     source,
@@ -181,9 +266,11 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       stopConversation();
       stopTasks();
       stopTopics();
+      stopSessions();
       conversation.dispose();
       tasks.dispose();
       topics.dispose();
+      sessions.dispose();
       listeners.clear();
     },
   };

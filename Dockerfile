@@ -4,6 +4,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git && rm -rf /var/lib/apt/lists/*
 RUN ./node_modules/.bin/gws --version
 COPY src ./src
+COPY bin ./bin
+RUN ln -s /app/bin/sage.mjs /usr/local/bin/sage
 COPY vendor ./vendor
 COPY instructions ./instructions
 COPY extensions ./extensions
