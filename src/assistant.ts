@@ -11,7 +11,6 @@ import {
   createRegistry,
   configure,
   defineDoc,
-  defineEntry,
   defineExtension,
   defineTask,
   GenerationTask,
@@ -40,6 +39,10 @@ import { calendarExtension } from "../extensions/calendar.ts";
 import { routinesExtension } from "../extensions/routines.ts";
 import { connectMcp } from "../extensions/mcp.ts";
 import type { Config } from "./config.ts";
+import {
+  ScheduledInput, SCHEDULED_DELIVERY, scheduledReply,
+  TELEGRAM_REWRITE, TELEGRAM_SHORTEN, KEEP_TELEGRAM_ROUTE, isTelegramCorrection,
+} from "./scheduled-delivery.ts";
 
 export const context = BACKGROUND_CONTEXT;
 export const USER_PROFILE_MAX_CHARS = 2000;
@@ -56,18 +59,6 @@ const ModelChoice = defineDoc<{ revision: string | null }>({
   kind: "sage.model-choice", version: 1, scope: "conversation",
   history: "latest", fork: "current", initial: () => ({ revision: null }),
 });
-const ScheduledInput = defineEntry<{ requestId: string; telegram?: boolean }>("personal.scheduled");
-const TELEGRAM_REWRITE = "Rewrite your last answer as a plain-text Telegram message. " +
-  "Keep the same facts, times, names, and useful details. Remove Markdown formatting and raw JSON; " +
-  "use short natural sentences or one plain line per schedule item. " +
-  "Do not add slang, an unsolicited offer, or a follow-up question. " +
-  "This is a wording correction only: do not repeat tools or actions, and do not invent file delivery.";
-const TELEGRAM_SHORTEN = TELEGRAM_REWRITE +
-  " The draft is too much for an ordinary text. Default to 1–3 short sentences, usually under 60 words. " +
-  "Keep only the direct answer, decision-critical facts or constraints, and at most one useful next step. " +
-  "Remove the full recap, repeated schedule, extra alternatives, and repeated conclusion. " +
-  "If the original user explicitly asked for detail, a full plan, or a complete list, keep the requested content " +
-  "and shorten only the surrounding commentary. Do not cut off sentences or change facts.";
 const DeliveryIndex = defineDoc<{ tasks: Record<string, TaskId> }>({
   kind: "personal.deliveries",
   version: 1,
@@ -117,8 +108,7 @@ export async function openAssistant(
   let harness: Harness;
   let root: Conversation;
 
-  async function isTelegramReply(conversationId: ConversationId, callContext: typeof context) {
-    if (!options.sendTelegram) return false;
+  async function replyChannel(conversationId: ConversationId, callContext: typeof context) {
     const live = await harness.snapshot(LiveDoc, conversationId, callContext);
     // Follow the active run, not a conversation-wide flag: main and topics can also receive TUI input.
     for (const id of live?.run?.inputs ?? []) {
@@ -127,15 +117,16 @@ export async function openAssistant(
       if (!status?.entry) continue;
       const entryId = status.entry;
       const entry = await harness.commit((tx) => tx.entry(entryId), callContext);
+      if (ScheduledInput.is(entry) && entry.data?.delivery === "agent") return "agent";
       if (entry?.kind === "personal.telegram" ||
-          (ScheduledInput.is(entry) && entry.data?.telegram === true)) return true;
+          (ScheduledInput.is(entry) && entry.data?.telegram === true)) return "telegram";
     }
-    return false;
+    return undefined;
   }
 
   // Delivery is a native durable task, including its wait and retry checkpoints.
   const Delivery = defineTask<
-    { submissionId: SubmissionId; threadId?: number },
+    { submissionId: SubmissionId; threadId?: number; delivery?: "agent"; telegram?: boolean },
     | { phase: "answer" }
     | {
         phase: "send";
@@ -175,6 +166,14 @@ export async function openAssistant(
                 : [],
             )
             .join("\n");
+          if (task.input.delivery === "agent") {
+            const reply = scheduledReply(text, task.input.telegram === true);
+            if (reply.channel !== "TELEGRAM") {
+              await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: null } }), callContext);
+              return;
+            }
+            text = reply.text;
+          }
           if (!text.trim()) {
             const limited = entry?.model?.some((message) => message.role === "assistant" && message.stopReason === "length");
             text = limited
@@ -270,20 +269,23 @@ export async function openAssistant(
     notify = false,
     steer = true,
     conversation = root,
+    delivery?: "agent",
   ) {
     const submission = await conversation.submit(
       {
         type: "input",
-        content,
+        content: delivery === "agent" ? `${content}\n\n${SCHEDULED_DELIVERY}\nTelegram configured: ${Boolean(config.telegramToken || options.sendTelegram)}.` : content,
         requestId,
         ...(steer ? { whenBusy: "steer" as const } : {}),
         ...(!steer
-          ? { entry: { kind: "personal.scheduled", data: { requestId, telegram: notify } } }
+          ? { entry: { kind: "personal.scheduled", data: { requestId,
+            telegram: delivery ? Boolean(config.telegramToken || options.sendTelegram) : notify,
+            ...(delivery ? { delivery } : {}) } } }
           : notify ? { entry: { kind: "personal.telegram" } } : {}),
       },
       context,
     );
-    if (notify && options.sendTelegram)
+    if (notify && (options.sendTelegram || config.telegramToken || delivery === "agent"))
       await conversation.commit(async (tx) => {
         const index = await tx.doc(DeliveryIndex);
         if (!index.tasks[String(submission.id)]) {
@@ -292,6 +294,7 @@ export async function openAssistant(
             Delivery,
             {
               submissionId: submission.id,
+              ...(delivery ? { delivery, telegram: Boolean(config.telegramToken || options.sendTelegram) } : {}),
               ...(route.threadId == null ? {} : { threadId: route.threadId }),
             },
             {
@@ -309,7 +312,7 @@ export async function openAssistant(
     submit: async (content, requestId, notify, conversationId) => {
       const conversation = await harness.conversation(conversationId, context);
       if (!conversation) throw new Error("Missing scheduled conversation");
-      return submit(content, requestId, notify, false, conversation);
+      return submit(content, requestId, notify, false, conversation, "agent");
     },
   });
   const images = await createNodePhotonImages();
@@ -346,12 +349,14 @@ export async function openAssistant(
         section("instructions_file", () =>
           readFile(join(workspace, "AGENTS.md"), "utf8"),
         ),
-        section("telegram_reply_style", async ({ conversationId }, callContext) =>
-          await isTelegramReply(conversationId, callContext)
-            ? readFile(join(workspace, "TELEGRAM.md"), "utf8") : undefined),
-        section("telegram_brevity", async ({ conversationId }, callContext) =>
-          await isTelegramReply(conversationId, callContext)
-            ? readFile(join(workspace, "TELEGRAM-BREVITY.md"), "utf8") : undefined),
+        ...["TELEGRAM.md", "TELEGRAM-BREVITY.md"].map((file, index) =>
+          section(index === 0 ? "telegram_reply_style" : "telegram_brevity", async ({ conversationId }, callContext) => {
+            if (!options.sendTelegram) return undefined;
+            const channel = await replyChannel(conversationId, callContext);
+            if (!channel) return undefined;
+            return (channel === "agent" ? "Apply these rules only when choosing [TELEGRAM] delivery.\n" : "") +
+              await readFile(join(workspace, file), "utf8");
+          })),
         section("skills", async () => {
           const skills = await readSkills(workspace);
           return `Read a relevant SKILL.md before using it. Skills are maintained by the user. Do not create, edit, or delete skills unless the user explicitly asks.\n${skills.map((skill) => `${skill.path}: ${skill.description}`).join("\n")}`;
@@ -359,9 +364,9 @@ export async function openAssistant(
       ],
       hooks: options.sendTelegram ? [hook(GenerationTask, {
         beforeRequest: async (request, api, callContext) => {
-          if (!await isTelegramReply(api.conversationId, callContext)) return;
+          if (!await replyChannel(api.conversationId, callContext)) return;
           const content = request.messages.findLast((message) => message.role === "user")?.content;
-          if (content !== TELEGRAM_REWRITE && content !== TELEGRAM_SHORTEN) return;
+          if (!isTelegramCorrection(content)) return;
           // This request may only reword the completed answer; it cannot repeat an external action.
           return { messages: [...request.messages, {
             role: "system", content: "Reword the answer only. Tools are unavailable for this correction.",
@@ -369,8 +374,14 @@ export async function openAssistant(
           }] };
         },
         onYield: async (answer, api, callContext) => {
-          if (!await isTelegramReply(api.conversationId, callContext)) return;
-          const text = answer.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+          const channel = await replyChannel(api.conversationId, callContext);
+          if (!channel) return;
+          let text = answer.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+          if (channel === "agent") {
+            const reply = scheduledReply(text, true);
+            if (reply.channel !== "TELEGRAM") return;
+            text = reply.text;
+          }
           let structured = false;
           try { const value = JSON.parse(text); structured = value !== null && typeof value === "object"; }
           catch { /* Ordinary conversation is not JSON. */ }
@@ -383,10 +394,11 @@ export async function openAssistant(
           const request = user?.role === "user" ? (typeof user.content === "string" ? user.content
             : user.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n")) : "";
           // The native continuation starts a new generation task, so task-local memos cannot bound this retry.
-          if (request === TELEGRAM_REWRITE || request === TELEGRAM_SHORTEN) return;
+          if (isTelegramCorrection(request)) return;
           // Honor explicit inline format requests; merely asking to save a JSON/Markdown file is not an opt-out.
           if (/\b(?:reply|respond|answer|return)\b[^\n]{0,60}\b(?:json|markdown|code)\b|\b(?:json|markdown|code)\b[^\n]{0,40}\b(?:inline|in (?:the )?chat)\b/i.test(request)) return;
-          return { continue: verbose ? TELEGRAM_SHORTEN : TELEGRAM_REWRITE };
+          return { continue: (verbose ? TELEGRAM_SHORTEN : TELEGRAM_REWRITE) +
+            (channel === "agent" ? KEEP_TELEGRAM_ROUTE : "") };
         },
       })] : [],
     }),
@@ -399,7 +411,7 @@ export async function openAssistant(
     submit: async (content, requestId, conversationId) => {
       const conversation = await harness.conversation(conversationId, context);
       if (!conversation) throw new Error("Missing routine conversation");
-      return submit(content, requestId, true, false, conversation);
+      return submit(content, requestId, true, false, conversation, "agent");
     },
   }));
   const extensionDir = new URL("../extensions/", import.meta.url);

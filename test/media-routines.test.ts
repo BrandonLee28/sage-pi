@@ -16,6 +16,8 @@ import { telegramGateway } from "../src/telegram.ts";
 import { routinesExtension, Routines, nextRun } from "../extensions/routines.ts";
 import { entryText } from "../extensions/recall.ts";
 import { redPng } from "./fixtures.ts";
+import { tuiAdapter } from "../src/tui-adapter.ts";
+import { ScheduledInput, scheduledReply } from "../src/scheduled-delivery.ts";
 
 const png = redPng();
 async function fixture() {
@@ -135,6 +137,102 @@ test("recurrence handles local wall-clock time across daylight saving changes", 
   assert.equal(new Date(nextRun("0 8 * * *", zone, Date.parse("2026-10-31T13:00:00Z"))).toISOString(), "2026-11-01T13:00:00.000Z");
   assert.throws(() => nextRun("* * * * * *", zone, Date.now()));
   assert.throws(() => nextRun("0 8 * * *", "invalid/zone", Date.now()));
+});
+
+test("scheduled delivery markers only route a leading directive and preserve legacy defaults", () => {
+  assert.deepEqual(scheduledReply("[TUI]\nTerminal update.", true), { channel: "TUI", text: "Terminal update." });
+  assert.deepEqual(scheduledReply(" [TELEGRAM]\nPhone update.", false), { channel: "TELEGRAM", text: "Phone update." });
+  assert.equal(scheduledReply("[SILENT]", true).channel, "SILENT");
+  assert.deepEqual(scheduledReply("Mention [SILENT] in prose.", true), { channel: "TELEGRAM", text: "Mention [SILENT] in prose." });
+  assert.equal(scheduledReply("[TUITION]", true).channel, "TELEGRAM");
+  assert.equal(scheduledReply("Unmarked update.", false).channel, "TUI");
+});
+
+test("recurring runs choose TUI, Telegram, or silence, preserve their topic, and retain an audit transcript", async (t) => {
+  let clock = Date.now(); t.mock.method(Date, "now", () => clock);
+  const f = await fixture();
+  f.config.telegramToken = "test-only";
+  const sent: { text: string; thread?: number }[] = [];
+  const send = async (text: string, thread?: number) => { sent.push({ text, thread }); };
+  let assistant = await f.open(send);
+  try {
+    const topic = await assistant.telegramConversation(55);
+    assert.ok(!(await call(f.faux, topic, "routine", { action: "save", id: "routing", title: "Morning check",
+      instructions: "Check the calendar and choose where to report.", cron: "* * * * *" })).message.isError);
+    for (const channel of ["TUI", "TELEGRAM", "SILENT"] as const) {
+      const previous = (await assistant.harness.snapshot(Routines, context))!.items.routing;
+      await assistant.close(); clock = previous.nextAt! + 1;
+      const update = channel === "SILENT" ? "[SILENT]" : `[${channel}]\n${channel === "TELEGRAM" ? "**Phone update.**" : "Terminal update."}`;
+      f.faux.setResponses([
+        fauxAssistantMessage(fauxToolCall("clock", {}), { stopReason: "toolUse" }),
+        fauxAssistantMessage(update),
+        ...(channel === "TELEGRAM" ? [fauxAssistantMessage("[TELEGRAM]\nPhone update.")] : []),
+      ]);
+      const before = f.faux.state.callCount;
+      assistant = await f.open(send);
+      const adapter = await tuiAdapter(assistant, f.config);
+      try {
+        await adapter.controller.switchConversation(topic.id);
+        for (let i = 0; i < 200; i++) {
+          if ((await assistant.harness.snapshot(Routines, context))!.items.routing.taskId !== previous.taskId) break;
+          await pause(5);
+        }
+        assert.equal((await assistant.harness.snapshot(Routines, context))!.items.routing.lastStatus, "done");
+        assert.equal(f.faux.state.callCount - before, channel === "TELEGRAM" ? 3 : 2, "Only Telegram is rewritten; tools run once");
+        const view = adapter.source.current().conversation;
+        const visible = view.entries.map(entryText).join("\n");
+        assert.ok(visible.includes("Terminal update."));
+        assert.ok(!visible.includes("Phone update."));
+        assert.ok(!visible.includes("[SILENT]"));
+        assert.ok(!view.entries.some(ScheduledInput.is), "Scheduled prompts and tool progress stay out of the TUI");
+        const raw = await (await assistant.harness.conversation(topic.id, context))!.entries({}, 100, undefined, context);
+        assert.ok(raw.items.some((entry) => ScheduledInput.is(entry) && entry.data?.delivery === "agent"));
+        assert.ok(raw.items.map(entryText).some((text) => text.includes(update)));
+      } finally { adapter.dispose(); }
+    }
+    for (let i = 0; i < 100 && sent.length === 0; i++) await pause(5);
+    assert.deepEqual(sent, [{ text: "Phone update.", thread: 55 }]);
+    f.faux.setResponses([fauxAssistantMessage("Normal terminal reply.")]);
+    const topicAgain = (await assistant.harness.conversation(topic.id, context))!;
+    await (await assistant.submit("Hello again.", undefined, false, true, topicAgain)).wait(context);
+    const adapter = await tuiAdapter(assistant, f.config);
+    try {
+      await adapter.controller.switchConversation(topic.id);
+      assert.ok(adapter.source.current().conversation.entries.map(entryText).join("\n").includes("Normal terminal reply."));
+    } finally { adapter.dispose(); }
+  } finally { await assistant.close(); await f.cleanup(); }
+});
+
+test("an explicit phone update survives admission without a sender and delivers once after restart", async () => {
+  const f = await fixture();
+  const sent: { text: string; thread?: number }[] = [];
+  const send = async (text: string, thread?: number) => { sent.push({ text, thread }); };
+  let assistant = await f.open();
+  try {
+    const topic = await assistant.telegramConversation(66);
+    f.faux.setResponses([fauxAssistantMessage("[TELEGRAM]\nYour morning update.")]);
+    const submission = await assistant.submit("Scheduled check-in.", "offline-scheduled", true, false, topic, "agent");
+    await submission.wait(context);
+    let delivery;
+    for (let i = 0; i < 100; i++) {
+      const graph = await assistant.harness.taskGraph(context);
+      delivery = Object.values(graph.value.tasks).find((task) => task.kind === "personal.telegram-delivery");
+      graph.dispose();
+      if (delivery?.state.status === "running" && delivery.state.phase === "send") break;
+      await pause(5);
+    }
+    assert.ok(delivery, "A durable delivery is created even without a sender");
+    const deliveryId = delivery.id;
+    await assistant.close();
+    assistant = await f.open(send);
+    await assistant.harness.waitForTask(deliveryId, context);
+    assert.deepEqual(sent, [{ text: "Your morning update.", thread: 66 }]);
+    const restoredTopic = await assistant.telegramConversation(66);
+    assert.equal((await assistant.submit("Scheduled check-in.", "offline-scheduled", true, false, restoredTopic, "agent")).id, submission.id);
+    await assistant.close();
+    assistant = await f.open(send);
+    assert.equal(sent.length, 1);
+  } finally { await assistant.close(); await f.cleanup(); }
 });
 
 test("routines survive downtime, repeat once without backlog, preserve topic, and support pause/resume/delete", async (t) => {

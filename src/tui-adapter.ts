@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
+import { scheduledTuiView } from "./scheduled-delivery.ts";
 
 // This is the view/controller contract of Pi's original durable TUI example.
 export type DurableView = {
@@ -80,7 +81,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
         directory: config.dataDir,
         cwd: assistant.workspace,
       },
-      conversation: conversation.value,
+      conversation: scheduledTuiView(conversation.value, Boolean(config.telegramToken)),
       conversations: [
         { id: assistant.root.id, label: "main" },
         ...(sessions.value?.conversations ?? []).map((id, index) => ({ id, label: `Session ${index + 1}` })),
