@@ -16,6 +16,12 @@ Local adaptations:
   demo's model/session setup.
 - Render `personal.scheduled` inputs alongside regular user inputs.
 - Refresh the local provider's model catalog before opening its model picker.
+- Use Sage's compact brand header, Prime-derived palette, and shared Pi pickers
+  from `src/cli-ui.ts`; show a small conversation bar and shorter footer hints.
+- Offer the existing slash commands through Pi's native autocomplete and hide an
+  empty task panel. Editor, message/tool rendering, and execution stay upstream.
+
+See [Prime design provenance](../prime-design/README.md) for the reference and license.
 
 Keep presentation changes upstream where possible. Our application logic belongs
 in `src/` and native Pi extensions, not this file.

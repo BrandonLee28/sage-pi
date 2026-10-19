@@ -11,18 +11,13 @@ import type {
 } from "@earendil-works/pi-durable";
 import {
 	Box,
+	CombinedAutocompleteProvider,
 	type Component,
 	Container,
-	type Focusable,
-	fuzzyFilter,
-	getKeybindings,
-	Input,
 	Markdown,
 	ProcessTerminal,
 	ScrollView,
 	type SelectItem,
-	SelectList,
-	type SelectListTheme,
 	Spacer,
 	setCapabilityOverrides,
 	setKeybindings,
@@ -37,80 +32,15 @@ import type { SettingsManager } from "../../node_modules/@earendil-works/pi-codi
 import { createAllToolRenderers } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/renderers/index.js";
 import { AssistantMessageComponent } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/assistant-message.js";
 import { CustomEditor } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/custom-editor.js";
-import { DynamicBorder } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/dynamic-border.js";
 import { formatTokens } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/footer.js";
 import { keyText } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/keybinding-hints.js";
 import { type StatusIndicator, WorkingStatusIndicator } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/status-indicator.js";
 import { ToolExecutionComponent, type ToolRenderers } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
 import { UserMessageComponent } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/user-message.js";
-import { getEditorTheme, getMarkdownTheme, initTheme, theme } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import { getEditorTheme, getMarkdownTheme, theme } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { InteractiveThemeController } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-controller.js";
+import { SageHeader, SagePicker, registerSageTheme } from "../../src/cli-ui.ts";
 import { agentOf, type DurableController, type DurableView, type DurableViewSource } from "../../src/tui-adapter.ts";
-
-const SELECT_THEME: SelectListTheme = {
-	selectedPrefix: (text) => theme.fg("accent", text),
-	selectedText: (text) => theme.fg("accent", text),
-	description: (text) => theme.fg("muted", text),
-	scrollInfo: (text) => theme.fg("dim", text),
-	noMatch: (text) => theme.fg("warning", text),
-};
-
-/** A filterable list in place of the editor. */
-class ListSelector extends Container implements Focusable {
-	readonly #input = new Input();
-	readonly #listContainer = new Container();
-	readonly #items: SelectItem[];
-	readonly #onSelect: (value: string) => void;
-	readonly #onCancel: () => void;
-	#list: SelectList;
-	#focused = false;
-
-	constructor(title: string, items: SelectItem[], onSelect: (value: string) => void, onCancel: () => void) {
-		super();
-		this.#items = items;
-		this.#onSelect = onSelect;
-		this.#onCancel = onCancel;
-		this.#list = this.#build(items);
-		this.addChild(new DynamicBorder());
-		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
-		this.addChild(this.#input);
-		this.addChild(new Spacer(1));
-		this.addChild(this.#listContainer);
-		this.addChild(new DynamicBorder());
-	}
-
-	get focused(): boolean {
-		return this.#focused;
-	}
-	set focused(value: boolean) {
-		this.#focused = value;
-		this.#input.focused = value;
-	}
-
-	handleInput(data: string): void {
-		const keybindings = getKeybindings();
-		const forwarded = ["tui.select.up", "tui.select.down", "tui.select.confirm", "tui.select.cancel"] as const;
-		if (forwarded.some((action) => keybindings.matches(data, action))) {
-			this.#list.handleInput(data);
-			return;
-		}
-		this.#input.handleInput(data);
-		const query = this.#input.getValue();
-		const filtered =
-			query.length === 0 ? this.#items : fuzzyFilter(this.#items, query, (item) => `${item.label} ${item.value}`);
-		this.#list = this.#build(filtered);
-	}
-
-	#build(items: SelectItem[]): SelectList {
-		const list = new SelectList(items, 10, SELECT_THEME);
-		list.onSelect = (item) => this.#onSelect(item.value);
-		list.onCancel = this.#onCancel;
-		this.#listContainer.clear();
-		this.#listContainer.addChild(list);
-		return list;
-	}
-}
 
 /** The summary that replaced earlier context: collapsed to one line until expanded. */
 class CompactionComponent extends Box {
@@ -155,6 +85,8 @@ class DurableTui {
 	static readonly #renderers: Record<string, ToolRenderers> = createAllToolRenderers();
 	readonly #ui: TuiAltScreen;
 	readonly #chat = new Container();
+	readonly #header = new SageHeader();
+	readonly #topbar = new Text("", 1, 0);
 	readonly #tasks = new Container();
 	readonly #queue = new Container();
 	readonly #notices = new Container();
@@ -190,6 +122,13 @@ class DurableTui {
 			paddingX: 1,
 			embedWorkingStatus: true,
 		});
+		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
+			{ name: "model", description: "Choose a model" },
+			{ name: "agents", description: "Switch conversation" },
+			{ name: "compact", description: "Compact conversation context" },
+			{ name: "tasks", description: "Show or hide running tasks" },
+			{ name: "help", description: "Show shortcuts" },
+		], cwd));
 		this.#editor.onSubmit = handlers.submit;
 		this.#editor.onEscape = handlers.abort;
 		this.#editor.onCtrlD = handlers.exit;
@@ -213,6 +152,7 @@ class DurableTui {
 		this.#footer.addChild(this.#footerHints);
 		// One empty line between the transcript and everything below it.
 		const content = new Container();
+		content.addChild(this.#header);
 		content.addChild(this.#chat);
 		content.addChild(new Spacer(1));
 		const transcript = new ScrollView(content, { follow: "end", primary: true, overscroll: "chain" });
@@ -225,6 +165,7 @@ class DurableTui {
 			{ component: this.#footer, shrink: 1, minSize: 0 },
 		]);
 		for (const component of [
+			this.#topbar,
 			this.#chat,
 			this.#tasks,
 			this.#queue,
@@ -236,6 +177,7 @@ class DurableTui {
 		}
 		this.#ui.setLayoutRoot(
 			new VStack([
+				{ component: this.#topbar, basis: "auto", shrink: 1, minSize: 0 },
 				{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 				{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
 			]),
@@ -278,6 +220,7 @@ class DurableTui {
 
 	apply(view: DurableView): void {
 		const live = (view.conversation.docs["pi.live"] ?? {}) as LiveState;
+		this.#header.details = { model: agentOf(view.conversation).model?.modelId, cwd: view.session.cwd };
 		this.#syncTranscript(view.conversation.entries);
 		const message = live.generation?.message as AssistantMessage | undefined;
 		// A partial without its entry was dropped, for example by a retry: render the transcript again.
@@ -315,6 +258,7 @@ class DurableTui {
 		this.#tasks.clear();
 		if (graph === undefined) return;
 		const nodes = Object.values(graph.tasks);
+		if (!nodes.length) return;
 		const lines: string[] = [theme.fg("accent", `Tasks (${nodes.length} live, /tasks to hide)`)];
 		// A conversation-owned task sits under the task that owns its conversation, when that task is live.
 		const owned = new Set(nodes.flatMap((node) => node.conversations));
@@ -392,14 +336,15 @@ class DurableTui {
 			const text = `${percent === undefined ? "?" : percent.toFixed(1)}%/${formatTokens(contextWindow)}`;
 			stats.push(percent !== undefined && percent > 90 ? theme.fg("error", text) : text);
 		}
-		this.#footerStats.setText(theme.fg("dim", `${stats.join(" ")}  ${view.session.cwd}`));
+		this.#footerStats.setText(theme.fg("dim", stats.join("  ")));
 		const model = agent.model === undefined ? "no model" : `${agent.model.provider}/${agent.model.modelId}`;
 		const shown = view.conversations.find((candidate) => candidate.id === view.conversation.conversation.id);
 		const label = shown?.label ?? `conversation ${view.conversation.conversation.id}`;
+		this.#topbar.setText(theme.bold("sage") + theme.fg("dim", ` / ${label}  ·  $${usage.cost.total.toFixed(3)}`));
 		this.#footerHints.setText(
 			`${theme.fg(label === "main" ? "dim" : "accent", label)}${theme.fg(
 				"dim",
-				` · ${model} · thinking:${agent.thinkingLevel ?? "off"} (${keyText("app.thinking.cycle")}) · ${keyText("app.model.select")} or /model · /agents · /compact · /tasks · ${keyText("app.message.followUp")} follow-up · ${keyText("app.clear")} exit`,
+				` · ${model} · ${agent.thinkingLevel ?? "off"} (${keyText("app.thinking.cycle")}) · /model · /agents · /help`,
 			)}`,
 		);
 	}
@@ -567,8 +512,9 @@ export async function runDurableTui(
 	settings: SettingsManager,
 ): Promise<void> {
 	setCapabilityOverrides(settings.getTerminalCapabilityOverrides());
-	// The system theme until the controller resolves the user's theme against the terminal's colors.
-	initTheme();
+	// Register Sage's palette through Pi's native theme controller.
+	registerSageTheme();
+	settings.setTheme("sage");
 	let exit = (): void => {};
 	const exited = new Promise<void>((resolve) => {
 		exit = resolve;
@@ -588,16 +534,13 @@ export async function runDurableTui(
 				label: model.modelId,
 				description: model.provider,
 			}));
-		const selector = new ListSelector(
-			"Select model:",
-			items,
-			(value) => {
-				view.restoreEditor();
-				const separator = value.indexOf("/");
-				void controller.setModel({ provider: value.slice(0, separator), modelId: value.slice(separator + 1) });
-			},
-			() => view.restoreEditor(),
-		);
+		const selector = new SagePicker("Models", items, "Type a model name to filter.", current && `${current.provider}/${current.modelId}`);
+		selector.onSelect = (value) => {
+			view.restoreEditor();
+			const separator = value.indexOf("/");
+			void controller.setModel({ provider: value.slice(0, separator), modelId: value.slice(separator + 1) });
+		};
+		selector.onCancel = () => view.restoreEditor();
 		view.mount(selector);
 	};
 
@@ -608,15 +551,12 @@ export async function runDurableTui(
 			label: candidate.label,
 			description: `${candidate.id === snapshot.conversation.conversation.id ? "(shown) " : ""}${candidate.title ?? ""}`,
 		}));
-		const selector = new ListSelector(
-			"Switch to:",
-			items,
-			(value) => {
-				view.restoreEditor();
-				void controller.switchConversation(Number(value) as ConversationId);
-			},
-			() => view.restoreEditor(),
-		);
+		const selector = new SagePicker("Conversations", items, "Type to find a conversation.", String(snapshot.conversation.conversation.id));
+		selector.onSelect = (value) => {
+			view.restoreEditor();
+			void controller.switchConversation(Number(value) as ConversationId);
+		};
+		selector.onCancel = () => view.restoreEditor();
 		view.mount(selector);
 	};
 

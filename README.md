@@ -58,8 +58,13 @@ from the first build are preserved in `data/`.
 Run `npm link` once in this checkout to make `sage` available on your PATH.
 Without linking, use `npm run sage -- <command>`. The launcher reads this checkout's
 `.env` and resolves relative `DATA_DIR` paths from here, even when called elsewhere.
-`sage` opens the existing Pi TUI; `sage setup` opens a small numbered setup menu
-with Sage's ASCII banner.
+`sage` opens the existing Pi TUI with a compact Sage wordmark and model/workspace
+header. `sage setup` opens the matching setup menu. Use **↑/↓** to move,
+**Enter** to select, type to filter, and **Esc** to cancel. Model and conversation
+pickers inside chat use the same design; type `/` to discover chat commands.
+The muted palette and selection bands are adapted from
+[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent), with its MIT license
+and source reference preserved in [vendor/prime-design](vendor/prime-design/README.md).
 
 ```sh
 sage setup                 # Model, MCP servers, or diagnostics

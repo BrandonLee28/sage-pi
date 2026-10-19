@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -6,15 +5,8 @@ import { access, constants, mkdir } from "node:fs/promises";
 import { readConfig } from "./config.ts";
 import { httpUrl, readSettings, saveSettings, validateServer, type McpServer } from "./settings.ts";
 import { connectMcp } from "../extensions/mcp.ts";
-
-export const banner = String.raw`
-  ____    _    ____ _____
- / ___|  / \  / ___| ____|
- \___ \ / _ \| |  _|  _|
-  ___) / ___ \ |_| | |___
- |____/_/   \_\____|_____|
-       your personal assistant
-`;
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { SageHeader, registerSageTheme, selectOption, textPrompt } from "./cli-ui.ts";
 const help = `sage                         Open Pi's conversation TUI
 sage setup                   Open the setup menu
 sage model [ID] [--url URL]   Choose a model / OpenAI-compatible endpoint
@@ -45,27 +37,33 @@ async function advertisedModels(baseUrl: string, apiKey: string) {
 }
 
 export async function manage(args: string[]) {
-  console.log(banner);
+  registerSageTheme();
+  const header = new SageHeader();
+  const printHeader = () => console.log(header.render(process.stdout.columns ?? 80).map((row) => process.stdout.isTTY && !process.env.NO_COLOR ? row : stripTerminalSequences(row)).join("\n"));
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     url: { type: "string" }, env: { type: "string", multiple: true },
     "token-env": { type: "string" }, help: { type: "boolean", short: "h" },
   } });
-  if (values.help || positionals[0] === "help") { console.log(help); return; }
-  let rl: ReturnType<typeof createInterface> | undefined;
+  if (values.help || positionals[0] === "help") { printHeader(); console.log(help); return; }
+  const cancelled = Symbol("cancelled");
   const ask = async (prompt: string) => {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Interactive setup needs a terminal. Run sage --help for direct commands.");
-    rl ??= createInterface({ input: process.stdin, output: process.stdout });
-    return (await rl.question(prompt)).trim();
+    const result = await textPrompt(header, prompt);
+    if (result === undefined) throw cancelled;
+    return result;
   };
   try {
     const config = readConfig();
     const settings = readSettings(config.dataDir);
+    header.details = { model: config.modelId, cwd: join(config.dataDir, "workspace"), section: "Setup" };
     let [command, action, ...rest] = positionals;
     if (command === "setup") {
-      console.log("  1  Model\n  2  MCP servers\n  3  Diagnose setup\n");
-      const choice = await ask("Choose [1–3, Enter to exit]: ");
-      if (!choice) return;
-      command = ({ "1": "model", "2": "mcp", "3": "doctor" } as Record<string, string>)[choice];
+      const choice = await selectOption(header, "What would you like to configure?", [
+        { value: "model", label: "Model", description: "Choose the model and endpoint" },
+        { value: "mcp", label: "MCP servers", description: "Manage tool connections" },
+        { value: "doctor", label: "Diagnostics", description: "Check your local setup" },
+      ]);
+      if (choice === undefined) return;
+      command = choice;
     }
     if (command === "model") {
       if (rest.length) throw new Error("Usage: sage model [ID] [--url URL]");
@@ -75,27 +73,40 @@ export async function manage(args: string[]) {
         const baseUrl = httpUrl(values.url ?? config.baseUrl);
         let id = action;
         if (!id) {
-          console.log(`Current: ${config.modelId}\nEndpoint: ${baseUrl}`);
+          header.details.section = "Models";
           const ids = await advertisedModels(baseUrl, config.apiKey);
-          ids.forEach((model, index) => console.log(`  ${index + 1}  ${model}`));
-          const choice = await ask("Model number or ID [Enter to cancel]: ");
-          if (!choice) return;
-          id = /^\d+$/.test(choice) ? ids[Number(choice) - 1] : choice;
-          if (!id) throw new Error("Choose a listed number or enter a model ID.");
+          const choices = ids.map((id) => ({ value: id, label: id, description: id === config.modelId ? "Current model" : "Available" }));
+          const custom = "\0custom";
+          const choice = await selectOption(header, "Select a model", [...choices, { value: custom, label: "Enter a model ID…", description: "Configure a model manually" }], baseUrl, config.modelId);
+          if (choice === undefined) return;
+          id = choice === custom ? await ask("Model ID") : choice;
         }
         if (!id.trim()) throw new Error("Model ID cannot be empty.");
         settings.model = { id, baseUrl, revision: randomUUID() };
       }
     } else if (command === "mcp") {
+      header.details.section = "MCP servers";
       if (!action) {
-        console.log("  1  List\n  2  Add\n  3  Remove\n  4  Test connection\n");
-        const choice = await ask("Choose [1–4, Enter to exit]: ");
-        if (!choice) return;
-        action = ({ "1": "list", "2": "add", "3": "remove", "4": "test" } as Record<string, string>)[choice];
-        if (["add", "remove", "test"].includes(action)) rest = [await ask("Server name: ")];
+        const choice = await selectOption(header, "Manage MCP servers", [
+          { value: "list", label: "Configured servers", description: "Show saved connections" },
+          { value: "add", label: "Add a server", description: "Connect stdio or HTTP tools" },
+          { value: "test", label: "Test a connection", description: "Check a server and list its tools" },
+          { value: "remove", label: "Remove a server", description: "Delete a saved connection" },
+        ]);
+        if (choice === undefined) return;
+        action = choice;
+        if (action === "add") rest = [await ask("Name this server")];
+        if (action === "remove" || action === "test") {
+          const names = Object.keys(settings.mcpServers ?? {});
+          if (!names.length) { console.log("No MCP servers configured. Use sage mcp to add one."); return; }
+          const name = await selectOption(header, "Select a server", names.map((name) => ({ value: name, label: name })));
+          if (name === undefined) return;
+          rest = [name];
+        }
       }
       const servers = settings.mcpServers ??= {};
       if (action === "list") {
+        printHeader();
         const names = Object.keys(servers);
         console.log(names.length ? names.map((name) => `${name} (${ "url" in servers[name]! ? "HTTP" : "stdio" })`).join("\n") : "No MCP servers. Use sage mcp add NAME -- COMMAND [ARGS...]");
         return;
@@ -112,7 +123,11 @@ export async function manage(args: string[]) {
           if (values["token-env"]) throw new Error("Use --env with stdio servers.");
           server = { command: serverArgs[0]!, args: serverArgs.slice(1), ...(values.env ? { env: values.env } : {}) };
         } else {
-          const transport = await ask("Transport [stdio/http]: ");
+          const transport = await selectOption(header, "How does this server connect?", [
+            { value: "stdio", label: "Local process", description: "Run a command over stdio" },
+            { value: "http", label: "Remote server", description: "Connect to a Streamable HTTP URL" },
+          ]);
+          if (transport === undefined) return;
           if (transport === "http") {
             const url = httpUrl(await ask("Server URL: "));
             const bearerTokenEnv = await ask("Bearer token environment variable [optional]: ");
@@ -141,6 +156,8 @@ export async function manage(args: string[]) {
         delete servers[name];
       } else throw new Error("Use sage mcp list, add, remove or test.");
     } else if (command === "doctor") {
+      header.details.section = "Diagnostics";
+      printHeader();
       console.log(`Node ${process.versions.node}\nData: ${config.dataDir}\nModel: ${config.modelId}`);
       const ids = await advertisedModels(config.baseUrl, config.apiKey);
       console.log(`Model endpoint reachable: ${ids.length} model(s)`);
@@ -152,5 +169,5 @@ export async function manage(args: string[]) {
     } else throw new Error("Unknown command. Run sage --help.");
     await saveSettings(config.dataDir, settings);
     console.log("Saved. Restart Sage to apply changes.");
-  } finally { rl?.close(); }
+  } catch (error) { if (error !== cancelled) throw error; }
 }

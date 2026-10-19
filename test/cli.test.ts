@@ -18,7 +18,9 @@ test("CLI manages models and MCP without opening a conversation or running a ser
     env: { ...process.env, DATA_DIR: dataDir, TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "", LLM_BASE_URL: "http://127.0.0.1:1/v1" }, timeout: 15000,
   });
   try {
-    assert.match((await run("--help")).stdout, /____[\s\S]*sage model/);
+    const help = (await run("--help")).stdout;
+    assert.match(help, /sage[\s\S]*sage model/);
+    assert.doesNotMatch(help, /\x1b\[/);
     await run("model", "other-model", "--url", "http://127.0.0.1:1/v1");
     let settings = readSettings(dataDir);
     assert.equal(settings.model?.id, "other-model");
