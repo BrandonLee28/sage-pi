@@ -481,6 +481,50 @@ test("upstream TUI adapter submits, renders saved state, and reports native erro
   }
 });
 
+test("new TUI sessions isolate history, keep model preferences, and restore across restart", async () => {
+  const f = await fixture();
+  let assistant = await f.open();
+  let adapter = await tuiAdapter(assistant, f.config);
+  try {
+    f.faux.setResponses([fauxAssistantMessage("MAIN-ONLY answer."), fauxAssistantMessage("NEW-SESSION-ONLY answer.")]);
+    await adapter.controller.submit("MAIN-ONLY message", "steer");
+    await assistant.root.waitForIdle(context);
+    await adapter.controller.cycleThinking();
+    const previousAgent = agentOf(adapter.source.current().conversation);
+    const calls = f.faux.state.callCount;
+    await adapter.controller.submit("/new", "steer");
+    const fresh = adapter.source.current();
+    const id = fresh.conversation.conversation.id;
+    assert.notEqual(id, assistant.root.id);
+    assert.equal(f.faux.state.callCount, calls, "creating a session must not call the model");
+    assert.equal(fresh.conversations.find((item) => item.id === id)?.label, "Session 1");
+    assert.deepEqual(agentOf(fresh.conversation).model, previousAgent.model);
+    assert.equal(agentOf(fresh.conversation).thinkingLevel, previousAgent.thinkingLevel);
+    assert.equal(agentOf(fresh.conversation).cwd, assistant.workspace);
+    assert.doesNotMatch(JSON.stringify(fresh.conversation.entries), /MAIN-ONLY/);
+    await adapter.controller.submit("NEW-SESSION-ONLY message", "steer");
+    await assistant.harness.waitForIdle(context);
+    assert.match(JSON.stringify(adapter.source.current().conversation), /NEW-SESSION-ONLY answer/);
+    await adapter.controller.switchConversation(assistant.root.id);
+    assert.match(JSON.stringify(adapter.source.current().conversation), /MAIN-ONLY answer/);
+    assert.doesNotMatch(JSON.stringify(adapter.source.current().conversation), /NEW-SESSION-ONLY/);
+    await adapter.controller.switchConversation(id);
+    assert.match(JSON.stringify(adapter.source.current().conversation), /NEW-SESSION-ONLY/);
+    adapter.dispose();
+    await assistant.close();
+    assistant = await f.open();
+    adapter = await tuiAdapter(assistant, f.config);
+    assert.equal(adapter.source.current().conversation.conversation.id, id);
+    assert.equal(adapter.source.current().conversations.find((item) => item.id === id)?.label, "Session 1");
+    assert.match(JSON.stringify(adapter.source.current().conversation), /NEW-SESSION-ONLY answer/);
+    assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, previousAgent.thinkingLevel);
+    await adapter.controller.newSession();
+    assert.equal(adapter.source.current().conversations.length, 3);
+    assert.equal(adapter.source.current().conversations.at(-1)?.label, "Session 2");
+    assert.doesNotMatch(JSON.stringify(adapter.source.current().conversation.entries), /MAIN-ONLY|NEW-SESSION-ONLY/);
+  } finally { adapter.dispose(); await assistant.close(); await f.cleanup(); }
+});
+
 test("local-model quoted null dates clear through the native tool path", async () => {
   const f = await fixture();
   const assistant = await f.open();

@@ -5,7 +5,7 @@ import type {
   ModelRef,
   TaskGraph,
 } from "@earendil-works/pi-durable";
-import { context, TelegramTopics, type Assistant } from "./assistant.ts";
+import { context, TelegramTopics, TuiSessions, type Assistant } from "./assistant.ts";
 import type { Config } from "./config.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 
@@ -34,13 +34,18 @@ export type DurableController = {
   refreshModels(): Promise<void>;
   setModel(model: ModelRef): Promise<void>;
   toggleTasks(): Promise<void>;
+  newSession(): Promise<void>;
   switchConversation(id: ConversationId): Promise<void>;
 };
 export const agentOf = (view: ConversationView): AgentState =>
   (view.docs["pi.agent"] ?? {}) as AgentState;
 
 export async function tuiAdapter(assistant: Assistant, config: Config) {
-  let selected = assistant.root;
+  const sessions = await assistant.harness.documentState(TuiSessions, context);
+  if (!sessions) throw new Error("Missing TUI session index.");
+  let selected = sessions.value?.active
+    ? await assistant.harness.conversation(sessions.value.active, context) ?? assistant.root
+    : assistant.root;
   let conversation = await selected.viewState(context);
   const topics = await assistant.harness.documentState(TelegramTopics, context);
   if (!topics) throw new Error("Missing Telegram conversation index.");
@@ -68,6 +73,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       conversation: conversation.value,
       conversations: [
         { id: assistant.root.id, label: "main" },
+        ...(sessions.value?.conversations ?? []).map((id, index) => ({ id, label: `Session ${index + 1}` })),
         ...Object.entries(topics.value?.conversations ?? {}).map(([thread, id]) =>
           ({ id, label: `Telegram thread ${thread}` })),
       ],
@@ -99,9 +105,10 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
   const controller: DurableController = {
     submit: (text, mode) =>
       guard(async () => {
+        if (text.trim() === "/new") return controller.newSession();
         if (text.trim() === "/help") {
           notice(
-            "/tasks task graph · /compact [instructions] · /model · /agents · Esc stop · Ctrl+O expand tools · Ctrl+C exit. Ask to list memories or responsibilities.",
+            "/new new session · /sessions or /agents saved chats · /model · /tasks task graph · /compact [instructions] · Esc stop · Ctrl+O expand tools · Ctrl+C exit. Ask to list memories or responsibilities.",
           );
           return;
         }
@@ -156,11 +163,18 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       showTasks = !showTasks;
       changed();
     },
+    newSession: () => guard(async () => {
+      const created = await assistant.createSession(selected.id);
+      await controller.switchConversation(created.id);
+    }),
     switchConversation: (id) => guard(async () => {
       if (!source.current().conversations.some((item) => item.id === id))
         throw new Error("Conversation is not configured.");
       const next = await assistant.harness.conversation(id, context);
       if (!next) throw new Error("Conversation is missing.");
+      if (id === assistant.root.id || sessions.value?.conversations.includes(id)) {
+        await assistant.root.commit(async (tx) => { (await tx.doc(TuiSessions)).active = id; }, context);
+      }
       const view = await next.viewState(context);
       stopConversation();
       conversation.dispose();
@@ -172,6 +186,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
   };
   let stopConversation = conversation.subscribe(changed);
   const stopTopics = topics.subscribe(changed);
+  const stopSessions = sessions.subscribe(changed);
   const stopTasks = tasks.subscribe(changed);
   return {
     source,
@@ -181,9 +196,11 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       stopConversation();
       stopTasks();
       stopTopics();
+      stopSessions();
       conversation.dispose();
       tasks.dispose();
       topics.dispose();
+      sessions.dispose();
       listeners.clear();
     },
   };

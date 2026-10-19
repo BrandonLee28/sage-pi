@@ -144,12 +144,22 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | `/tasks`                  | Toggle Pi's native live task graph                                     |
 | `/compact [instructions]` | Compact while idle                                                     |
 | `/model`                  | Refresh and select models advertised by your llama.cpp server          |
-| `/agents`                 | Switch between the main conversation and Telegram thread histories     |
+| `/new`                    | Create and switch to a fresh saved chat with the current model/reasoning |
+| `/sessions`               | Create a session or return to a saved local chat or Telegram thread     |
+| `/agents`                 | Alias for `/sessions`                                                  |
 | `/help`                   | Show the short help notice                                             |
 | Ctrl+C / Ctrl+D           | Exit; unfinished durable work resumes on next start                    |
 
 Closing the local TUI stops this process. To keep the agent alive while disconnected,
 use tmux on your server or detach from the running container as described below.
+
+`/new` starts a separate native Pi conversation without clearing or copying the
+previous transcript. Workspace files, memory, tools, and responsibilities stay
+shared. Choose **+ New session** in `/sessions` (also available through `/agents`)
+to do the same thing. Saved chats appear as **Session 1**, **Session 2**, and so on.
+Switching chats leaves any ongoing work in the previous conversation running.
+Restart reopens your last selected local chat; viewing a Telegram thread does not
+change that local startup choice. Telegram's existing main/topic routing stays intact.
 
 ## Homelab container
 

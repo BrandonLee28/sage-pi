@@ -25,6 +25,9 @@ Local adaptations:
   remain native; the four-column input padding reserves space for the prompt.
 - Offer the existing slash commands through Pi's native autocomplete and hide an
   empty task panel. Editor, message/tool rendering, and execution stay upstream.
+- Add `/new` and a **New session** row to the session picker (`/sessions`, with
+  `/agents` retained). The app adapter creates native Pi conversations and stores
+  their local navigation index/selection in a native session document.
 
 See [Prime design provenance](../prime-design/README.md) for the reference and license.
 

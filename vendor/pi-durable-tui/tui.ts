@@ -120,6 +120,8 @@ export class DurableTui {
 			embedWorkingStatus: true,
 		});
 		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
+			{ name: "new", description: "Start a fresh session" },
+			{ name: "sessions", description: "New session or saved chats" },
 			{ name: "model", description: "Choose a model" },
 			{ name: "agents", description: "Switch conversation" },
 			{ name: "compact", description: "Compact conversation context" },
@@ -541,14 +543,15 @@ export async function runDurableTui(
 
 	const selectConversation = (): void => {
 		const snapshot = source.current();
-		const items: SelectItem[] = [...snapshot.conversations].reverse().map((candidate) => ({
+		const items: SelectItem[] = [{ value: "new", label: "+ New session", description: "Start a fresh chat" }, ...[...snapshot.conversations].reverse().map((candidate) => ({
 			value: String(candidate.id),
 			label: candidate.label,
 			description: `${candidate.id === snapshot.conversation.conversation.id ? "(shown) " : ""}${candidate.title ?? ""}`,
-		}));
-		const selector = new SagePicker("Conversations", items, "Type to find a conversation.", String(snapshot.conversation.conversation.id));
+		}))];
+		const selector = new SagePicker("Sessions", items, "Create a session or return to a saved chat.", String(snapshot.conversation.conversation.id));
 		selector.onSelect = (value) => {
 			view.restoreEditor();
+			if (value === "new") return void controller.newSession();
 			void controller.switchConversation(Number(value) as ConversationId);
 		};
 		selector.onCancel = () => view.restoreEditor();
@@ -560,8 +563,9 @@ export async function runDurableTui(
 			const trimmed = text.trim();
 			if (!trimmed) return;
 			if (trimmed === "/model") return selectModel();
+			if (trimmed === "/new") return void controller.newSession();
 			if (trimmed === "/tasks") return void controller.toggleTasks();
-			if (trimmed === "/agents") return selectConversation();
+			if (trimmed === "/sessions" || trimmed === "/agents") return selectConversation();
 			if (trimmed === "/compact" || trimmed.startsWith("/compact ")) {
 				const instructions = trimmed.slice("/compact".length).trim();
 				return void controller.compact(instructions || undefined);

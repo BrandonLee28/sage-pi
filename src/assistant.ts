@@ -68,6 +68,10 @@ export const TelegramTopics = defineDoc<{ conversations: Record<string, Conversa
   scope: "session",
   initial: () => ({ conversations: {} }),
 });
+export const TuiSessions = defineDoc<{ conversations: ConversationId[]; active: ConversationId | null }>({
+  kind: "sage.tui-sessions", version: 1, scope: "session",
+  initial: () => ({ conversations: [], active: null }),
+});
 const TelegramRoute = defineDoc<{ threadId: number | null }>({
   kind: "personal.telegram-route",
   version: 1,
@@ -426,9 +430,10 @@ export async function openAssistant(
     context,
   );
   root = await harness.root(context);
-  await root.commit(async (tx) => { await tx.doc(TelegramTopics); }, context);
+  await root.commit(async (tx) => { await tx.doc(TelegramTopics); await tx.doc(TuiSessions); }, context);
   const topics = await harness.snapshot(TelegramTopics, context);
-  for (const id of [root.id, ...Object.values(topics?.conversations ?? {})]) {
+  const sessions = await harness.snapshot(TuiSessions, context);
+  for (const id of [root.id, ...Object.values(topics?.conversations ?? {}), ...(sessions?.conversations ?? [])]) {
     const conversation = await harness.conversation(id, context);
     if (!conversation) throw new Error(`Missing conversation ${id}`);
     const saved = await harness.snapshot(AgentDoc, id, context);
@@ -461,6 +466,20 @@ export async function openAssistant(
     harness,
     root,
     submit,
+    async createSession(from: ConversationId) {
+      const saved = await harness.snapshot(AgentDoc, from, context);
+      if (!saved?.model) throw new Error("The current session has no configured model.");
+      return harness.createConversation({
+        ownership: { kind: "ownerless" },
+        agent: { model: saved.model, thinkingLevel: saved.thinkingLevel ?? "low", cwd: workspace },
+        init: async (tx, id) => {
+          const sessions = await tx.doc(TuiSessions);
+          sessions.conversations.push(id);
+          sessions.active = id;
+          (await tx.doc(ModelChoice, id)).revision = config.modelRevision ?? null;
+        },
+      }, context);
+    },
     async telegramConversation(threadId?: number) {
       if (threadId === undefined) return root;
       const id = await root.commit(async (tx) => {
