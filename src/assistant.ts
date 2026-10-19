@@ -1,0 +1,418 @@
+import { cp, mkdir, readdir, readFile } from "node:fs/promises";
+import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Models } from "@earendil-works/pi-ai/models";
+import {
+  AssistantEntry,
+  AgentDoc,
+  createRegistry,
+  configure,
+  defineDoc,
+  defineExtension,
+  defineTask,
+  Harness,
+  section,
+  type Conversation,
+  type ConversationId,
+  type SubmissionId,
+  type TaskId,
+} from "@earendil-works/pi-durable";
+import {
+  createCodingTools,
+  createReadTool,
+  createWriteTool,
+  createEditTool,
+} from "@earendil-works/pi-durable/tools";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { localModels } from "./model.ts";
+import { personalExtension, personalState } from "./personal.ts";
+import { webExtension } from "./web.ts";
+import { calendarExtension } from "../extensions/calendar.ts";
+import { routinesExtension } from "../extensions/routines.ts";
+import type { Config } from "./config.ts";
+
+export const context = BACKGROUND_CONTEXT;
+const DeliveryIndex = defineDoc<{ tasks: Record<string, TaskId> }>({
+  kind: "personal.deliveries",
+  version: 1,
+  scope: "session",
+  initial: () => ({ tasks: {} }),
+});
+export const TelegramTopics = defineDoc<{ conversations: Record<string, ConversationId> }>({
+  kind: "personal.telegram-topics",
+  version: 1,
+  scope: "session",
+  initial: () => ({ conversations: {} }),
+});
+const TelegramRoute = defineDoc<{ threadId: number | null }>({
+  kind: "personal.telegram-route",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "current",
+  initial: () => ({ threadId: null }),
+});
+
+export async function openAssistant(
+  config: Config,
+  options: {
+    models?: Models;
+    model?: { provider: string; modelId: string };
+    sendTelegram?: (text: string, threadId?: number) => Promise<void>;
+  } = {},
+) {
+  const workspace = join(config.dataDir, "workspace");
+  await mkdir(workspace, { recursive: true });
+  await cp(new URL("../instructions/", import.meta.url), workspace, {
+    recursive: true,
+    force: false,
+  });
+  const models = options.models ?? await localModels(config);
+  const advertised = models.getModels()[0];
+  const defaultModel = options.model ?? (models.getModel("local", config.modelId)
+    ? { provider: "local", modelId: config.modelId }
+    : advertised ? { provider: advertised.provider, modelId: advertised.id } : undefined);
+  if (!defaultModel) throw new Error("No model is available from llama.cpp.");
+  const registry = createRegistry();
+  let harness: Harness;
+  let root: Conversation;
+
+  // Delivery is a native durable task, including its wait and retry checkpoints.
+  const Delivery = defineTask<
+    { submissionId: SubmissionId; threadId?: number },
+    | { phase: "answer" }
+    | {
+        phase: "send";
+        text: string;
+        offset: number;
+        attempt: number;
+        retryAt: number;
+      },
+    null
+  >({
+    name: "personal.telegram-delivery",
+    version: 1,
+    initial: () => ({ phase: "answer" }),
+    phases: {
+      answer: async (task, runtime, callContext) => {
+        const submission = await harness.submission(
+          task.input.submissionId,
+          callContext,
+        );
+        if (!submission)
+          throw new Error("Missing submission for Telegram delivery");
+        const settled = await submission.wait(callContext);
+        let text =
+          "The agent could not complete that request. Check the terminal for details.";
+        if (settled.status === "done" && settled.type === "input") {
+          const entry = await runtime.entry(
+            AssistantEntry,
+            settled.answer,
+            callContext,
+          );
+          text = (entry?.model ?? [])
+            .flatMap((message) =>
+              message.role === "assistant"
+                ? message.content.flatMap((part) =>
+                    part.type === "text" ? [part.text] : [],
+                  )
+                : [],
+            )
+            .join("\n");
+          if (!text.trim()) {
+            const limited = entry?.model?.some((message) => message.role === "assistant" && message.stopReason === "length");
+            text = limited
+              ? "I hit the response limit before producing an answer. Your request isn't finished. Please ask me to handle one part at a time."
+              : "The model finished without producing an answer. Your request isn't finished. Please try again.";
+          }
+        }
+        await runtime.commit(
+          () => ({
+            status: "running",
+            checkpoint: {
+              phase: "send",
+              text,
+              offset: 0,
+              attempt: 0,
+              retryAt: 0,
+            },
+          }),
+          callContext,
+        );
+      },
+      send: async (task, runtime, callContext) => {
+        const saved = task.state.checkpoint;
+        if (!options.sendTelegram) {
+          // Keep configured but temporarily unavailable delivery pending across restarts.
+          await runtime.sleep(runtime.now() + 60000, callContext);
+          await runtime.commit(
+            () => ({
+              status: "running",
+              checkpoint: { ...saved, attempt: saved.attempt + 1 },
+            }),
+            callContext,
+          );
+          return;
+        }
+        if (saved.offset >= saved.text.length) {
+          await runtime.commit(
+            () => ({
+              status: "terminal",
+              outcome: { status: "completed", result: null },
+            }),
+            callContext,
+          );
+          return;
+        }
+        try {
+          await runtime.sleep(saved.retryAt, callContext);
+          // ponytail: Telegram has no idempotency key; a crash after send can duplicate the last chunk.
+          const chunk = saved.text.slice(saved.offset, saved.offset + 3500);
+          await options.sendTelegram(chunk, task.input.threadId);
+          await runtime.commit(
+            () => ({
+              status: "running",
+              checkpoint: {
+                ...saved,
+                offset: saved.offset + chunk.length,
+                attempt: 0,
+              },
+            }),
+            callContext,
+          );
+        } catch (error) {
+          if (runtime.signal.aborted) throw error;
+          if (saved.attempt >= 5) throw error;
+          console.error(
+            "Telegram delivery failed; retry scheduled:",
+            error instanceof Error ? error.message : "unknown error",
+          );
+          await runtime.commit(
+            () => ({
+              status: "running",
+              checkpoint: {
+                ...saved,
+                attempt: saved.attempt + 1,
+                retryAt: runtime.now() + 5000 * 2 ** saved.attempt,
+              },
+            }),
+            callContext,
+          );
+        }
+      },
+    },
+    abort: (_task, runtime, callContext) =>
+      runtime.commit(
+        () => ({ status: "terminal", outcome: { status: "aborted" } }),
+        callContext,
+      ),
+  });
+
+  async function submit(
+    content: string,
+    requestId: string = randomUUID(),
+    notify = false,
+    steer = true,
+    conversation = root,
+  ) {
+    const submission = await conversation.submit(
+      {
+        type: "input",
+        content,
+        requestId,
+        ...(steer ? { whenBusy: "steer" as const } : {}),
+        ...(!steer
+          ? { entry: { kind: "personal.scheduled", data: { requestId } } }
+          : {}),
+      },
+      context,
+    );
+    if (notify && options.sendTelegram)
+      await conversation.commit(async (tx) => {
+        const index = await tx.doc(DeliveryIndex);
+        if (!index.tasks[String(submission.id)]) {
+          const route = await tx.doc(TelegramRoute, conversation.id);
+          index.tasks[String(submission.id)] = await tx.createTask(
+            Delivery,
+            {
+              submissionId: submission.id,
+              ...(route.threadId == null ? {} : { threadId: route.threadId }),
+            },
+            {
+              ownership: { kind: "conversation" },
+              background: true,
+            },
+          );
+        }
+      }, context);
+    return submission;
+  }
+
+  const personal = personalExtension({
+    timezone: config.timezone,
+    submit: async (content, requestId, notify, conversationId) => {
+      const conversation = await harness.conversation(conversationId, context);
+      if (!conversation) throw new Error("Missing scheduled conversation");
+      return submit(content, requestId, notify, false, conversation);
+    },
+  });
+  const images = await createNodePhotonImages();
+  registry.install(
+    config.enableShell
+      ? createCodingTools({ images })
+      : defineExtension({
+          name: "coding-tools",
+          tools: [createReadTool({ images }), createWriteTool(), createEditTool()],
+        }),
+  );
+  registry.install(personal.extension);
+  registry.install(defineExtension({ name: "delivery", tasks: [Delivery] }));
+  registry.install(
+    defineExtension({
+      name: "instructions",
+      sections: [
+        section("soul", () =>
+          readFile(join(workspace, "SOUL.md"), "utf8"),
+        ),
+        section("instructions_file", () =>
+          readFile(join(workspace, "AGENTS.md"), "utf8"),
+        ),
+        section("skills", async () => {
+          const folders = await readdir(join(workspace, "skills"), {
+            withFileTypes: true,
+          });
+          const skills = await Promise.all(
+            folders
+              .filter((f) => f.isDirectory())
+              .map(async (folder) => {
+                const path = `skills/${folder.name}/SKILL.md`;
+                const contents = await readFile(
+                  join(workspace, path),
+                  "utf8",
+                ).catch(() => "");
+                const description =
+                  contents.match(/^description:\s*(.+)$/m)?.[1] ?? "";
+                return `${path}: ${description}`;
+              }),
+          );
+          return `Read a relevant SKILL.md before using it. Skills are maintained by the user. Do not create, edit, or delete skills unless the user explicitly asks.\n${skills.join("\n")}`;
+        }),
+      ],
+    }),
+  );
+  const web = webExtension(config);
+  registry.install(web.extension);
+  registry.install(calendarExtension(config));
+  registry.install(routinesExtension({
+    timezone: config.timezone,
+    submit: async (content, requestId, conversationId) => {
+      const conversation = await harness.conversation(conversationId, context);
+      if (!conversation) throw new Error("Missing routine conversation");
+      return submit(content, requestId, true, false, conversation);
+    },
+  }));
+  const extensionDir = new URL("../extensions/", import.meta.url);
+  for (const file of (await readdir(extensionDir))
+    .filter((name) => name.endsWith(".ts") && !name.endsWith(".d.ts"))
+    .sort()) {
+    const extension = (await import(new URL(file, extensionDir).href)).default;
+    if (extension) registry.install(extension);
+  }
+  harness = await Harness.open(
+    await openNodeSqliteStorage(join(config.dataDir, "agent.sqlite")),
+    {
+      models,
+      registry,
+      env: ({ cwd }) => new NodeExecutionEnv({
+        cwd: cwd ?? workspace,
+        shellEnv: {
+          PATH: fileURLToPath(new URL("../node_modules/.bin", import.meta.url)) +
+            delimiter + (process.env.PATH ?? ""),
+          GOOGLE_WORKSPACE_CLI_CONFIG_DIR:
+            process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR ?? join(config.dataDir, "google"),
+        },
+      }),
+      settings: {
+        // One conversation owns all inference, including follow-ups. No competing compaction stream.
+        compaction: {
+          backgroundTokens: 0,
+          reserveTokens: Math.max(config.maxTokens + 1024, 4096),
+          keepRecentTokens: 8192,
+        },
+        stream: { timeoutMs: 300000, maxRetries: 0 },
+        retry: { maxRetries: 1, baseDelayMs: 3000 },
+        progress: { partialIntervalMs: 250, outputIntervalMs: 250 },
+        toolExecution: "sequential",
+        steeringMode: "all",
+      },
+      onReport: (error) =>
+        console.error(
+          "[Pi]",
+          error instanceof Error ? error.message : String(error),
+        ),
+    },
+    context,
+  );
+  root = await harness.root(context);
+  await root.commit(async (tx) => { await tx.doc(TelegramTopics); }, context);
+  const topics = await harness.snapshot(TelegramTopics, context);
+  for (const id of [root.id, ...Object.values(topics?.conversations ?? {})]) {
+    const conversation = await harness.conversation(id, context);
+    if (!conversation) throw new Error(`Missing conversation ${id}`);
+    const saved = await harness.snapshot(AgentDoc, id, context);
+    await conversation.configure({
+      model: saved?.model && models.getModel(saved.model.provider, saved.model.modelId)
+        ? saved.model : defaultModel,
+      thinkingLevel: saved?.thinkingLevel ?? "low",
+      cwd: workspace,
+    }, context);
+  }
+  harness.resume();
+
+  return {
+    models,
+    harness,
+    root,
+    submit,
+    async telegramConversation(threadId?: number) {
+      if (threadId === undefined) return root;
+      const id = await root.commit(async (tx) => {
+        const topics = await tx.doc(TelegramTopics);
+        if (!topics.conversations[String(threadId)]) {
+          const created = await tx.createConversation({ ownership: { kind: "ownerless" } });
+          await configure(tx, created.id, {
+            model: defaultModel,
+            thinkingLevel: "low",
+            cwd: workspace,
+          });
+          const route = await tx.doc(TelegramRoute, created.id);
+          route.threadId = threadId;
+          topics.conversations[String(threadId)] = created.id;
+        }
+        return topics.conversations[String(threadId)]!;
+      }, context);
+      const conversation = await harness.conversation(id, context);
+      if (!conversation) throw new Error("Missing Telegram conversation");
+      return conversation;
+    },
+    registry,
+    workspace,
+    personalState: () => personalState(harness, context),
+    async saveCommitment(value: Parameters<typeof personal.saveCommitment>[2]) {
+      return root.commit(
+        (tx) => personal.saveCommitment(tx, root.id, value, Date.now()),
+        context,
+      );
+    },
+    async close() {
+      await harness.close(context);
+      await web.close();
+    },
+  };
+}
+
+export type Assistant = Awaited<ReturnType<typeof openAssistant>>;

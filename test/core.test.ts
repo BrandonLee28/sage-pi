@@ -1,0 +1,700 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as pause } from "node:timers/promises";
+import { createModels } from "@earendil-works/pi-ai/models";
+import {
+  fauxProvider,
+  fauxAssistantMessage,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
+import { context, openAssistant } from "../src/assistant.ts";
+import { readConfig } from "../src/config.ts";
+import { agentOf, tuiAdapter } from "../src/tui-adapter.ts";
+import { localModels, singleStream } from "../src/model.ts";
+import { telegramGateway } from "../src/telegram.ts";
+import { Api, Bot } from "grammy";
+import { getCurrentSystemPrompt, normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
+
+async function fixture() {
+  const dataDir = await mkdtemp(join(tmpdir(), "personal-pi-test-"));
+  const config = {
+    ...readConfig(),
+    dataDir,
+    enableShell: false,
+    telegramToken: "",
+    telegramChat: "",
+    searxngUrl: "",
+    firecrawlUrl: "",
+    lightpandaUrl: "",
+    appleId: "",
+    appleAppPassword: "",
+    appleCalendarUrl: "",
+  };
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider({ ...faux.provider, ...singleStream(faux.provider) });
+  const open = (sendTelegram?: (text: string, threadId?: number) => Promise<void>) =>
+    openAssistant(config, {
+      models,
+      model: { provider: "faux", modelId: "faux-1" },
+      sendTelegram,
+    });
+  return {
+    config,
+    faux,
+    open,
+    cleanup: () => rm(dataDir, { recursive: true, force: true }),
+  };
+}
+
+test("Sage's soul enters the native prompt, refreshes live, and preserves edits on restart", async () => {
+  const f = await fixture();
+  let assistant = await f.open();
+  const soulPath = join(assistant.workspace, "SOUL.md");
+  const prompt = async () => getCurrentSystemPrompt((await assistant.root.context(context)).messages);
+  try {
+    f.faux.setResponses([fauxAssistantMessage("Hello."), fauxAssistantMessage("Updated."), fauxAssistantMessage("Still Sage.")]);
+    assert.equal((await (await assistant.submit("Hello.")).wait(context)).status, "done");
+    assert.ok((await prompt()).includes("You are Sage: curious, opinionated, playfully flirty"));
+    const customSoul = "You are Sage. Custom personality: a dry sense of humor.";
+    await writeFile(soulPath, customSoul);
+    assert.equal((await (await assistant.submit("Hello again.")).wait(context)).status, "done");
+    assert.ok((await prompt()).includes(customSoul));
+    await assistant.close();
+    assistant = await f.open();
+    assert.equal(await readFile(soulPath, "utf8"), customSoul);
+    const topic = await assistant.telegramConversation(44);
+    assert.equal((await (await assistant.submit("Hello from a topic.", undefined, false, true, topic)).wait(context)).status, "done");
+    assert.ok(getCurrentSystemPrompt((await topic.context(context)).messages).includes(customSoul));
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("native tool execution, memory retrieval, idempotent submission, and editable instructions survive reopen", async () => {
+  const f = await fixture();
+  let assistant = await f.open();
+  try {
+    f.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("memory", {
+          action: "save",
+          key: "preferences/messages",
+          text: "Keep messages short.",
+          source: "test user",
+          pinned: true,
+        }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Saved."),
+    ]);
+    const first = await assistant.submit("Remember my preference.", "memory-1");
+    assert.equal((await first.wait(context)).status, "done");
+    assert.equal(
+      (await assistant.submit("Remember my preference.", "memory-1")).id,
+      first.id,
+    );
+    assert.equal(f.faux.state.callCount, 2);
+    const marker = "Custom instructions retained after restart.";
+    await writeFile(join(assistant.workspace, "AGENTS.md"), marker);
+    await assistant.close();
+    assistant = await f.open();
+    const restoredView = await assistant.root.viewState(context);
+    assert.ok(JSON.stringify(restoredView.value.entries).includes('Saved.'));
+    restoredView.dispose();
+    assert.equal(
+      await readFile(join(assistant.workspace, "AGENTS.md"), "utf8"),
+      marker,
+    );
+    assert.equal(
+      (await assistant.personalState()).memories[0].source,
+      "test user",
+    );
+    f.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("memory", { action: "search", query: "short" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("You prefer short messages."),
+    ]);
+    assert.equal(
+      (
+        await (
+          await assistant.submit("What do I prefer?", "memory-2")
+        ).wait(context)
+      ).status,
+      "done",
+    );
+    const view = await assistant.root.context(context);
+    assert.ok(JSON.stringify(view.messages).includes(marker));
+    assert.ok(
+      view.messages.some(
+        (m) =>
+          m.role === "toolResult" &&
+          JSON.stringify(m.content).includes("Keep messages short"),
+      ),
+    );
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("native timer recovers after restart, ignores superseded wakes, and cancelled responsibilities stay quiet", async () => {
+  const f = await fixture();
+  let assistant = await f.open();
+  try {
+    f.faux.setResponses([
+      fauxAssistantMessage("Time for the scheduled check-in."),
+    ]);
+    await assistant.saveCommitment({
+      id: "stretch",
+      title: "Stretch",
+      wakeAt: new Date(Date.now() + 400).toISOString(),
+    });
+    await assistant.saveCommitment({
+      id: "stretch",
+      wakeAt: new Date(Date.now() + 1400).toISOString(),
+    });
+    await assistant.saveCommitment({
+      id: "cancelled",
+      title: "Cancelled",
+      wakeAt: new Date(Date.now() + 500).toISOString(),
+    });
+    await assistant.saveCommitment({ id: "cancelled", status: "cancelled" });
+    await assistant.close();
+    assistant = await f.open();
+    await pause(700);
+    assert.equal(f.faux.state.callCount, 0);
+    for (let i = 0; i < 80 && f.faux.state.callCount === 0; i++)
+      await pause(50);
+    await assistant.root.waitForIdle(context);
+    assert.equal(f.faux.state.callCount, 1);
+    assert.equal(
+      (await assistant.personalState()).commitments.find(
+        (c) => c.id === "stretch",
+      )?.wakeAt,
+      null,
+    );
+    await assistant.close();
+    assistant = await f.open();
+    await pause(100);
+    assert.equal(f.faux.state.callCount, 1);
+    const entries = await assistant.root.entries({}, 100, undefined, context);
+    assert.equal(
+      entries.items.filter((entry) =>
+        entry.model?.some(
+          (m) =>
+            m.role === "user" &&
+            String(m.content).includes("Scheduled check-in"),
+        ),
+      ).length,
+      1,
+    );
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("upstream TUI adapter submits, renders saved state, and reports native errors", async () => {
+  const f = await fixture();
+  const assistant = await f.open();
+  const adapter = await tuiAdapter(assistant, f.config);
+  try {
+    f.faux.setResponses([
+      fauxAssistantMessage("Hello from the native harness."),
+    ]);
+    await adapter.controller.submit("Hello", "steer");
+    await assistant.root.waitForIdle(context);
+    assert.ok(
+      JSON.stringify(adapter.source.current().conversation).includes(
+        "Hello from the native harness.",
+      ),
+    );
+    assert.equal(adapter.source.current().models[0].modelId, "faux-1");
+    assert.ok(adapter.source.current().tasks);
+    await adapter.controller.toggleTasks();
+    assert.equal(adapter.source.current().tasks, undefined);
+    await adapter.controller.setModel({
+      provider: "missing",
+      modelId: "missing",
+    });
+    assert.ok(
+      adapter.source
+        .current()
+        .notices.some((n) => n.message.includes("not configured")),
+    );
+    await assert.rejects(
+      assistant.saveCommitment({
+        id: "bad-date",
+        title: "Bad date",
+        wakeAt: "2030-01-01T10:00:00",
+      }),
+      /timezone/,
+    );
+  } finally {
+    adapter.dispose();
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("local-model quoted null dates clear through the native tool path", async () => {
+  const f = await fixture();
+  const assistant = await f.open();
+  try {
+    await assistant.saveCommitment({
+      id: "clear-dates",
+      title: "Clear dates",
+      wakeAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    f.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("commitment", {
+          action: "save",
+          id: "clear-dates",
+          status: "done",
+          dueAt: "null",
+          wakeAt: "null",
+        }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Done."),
+    ]);
+    assert.equal(
+      (
+        await (
+          await assistant.submit("Mark it done.", "clear-null")
+        ).wait(context)
+      ).status,
+      "done",
+    );
+    const item = (await assistant.personalState()).commitments[0];
+    assert.equal(item.status, "done");
+    assert.equal(item.wakeAt, null);
+    assert.equal(item.dueAt, null);
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("durable delivery sends an answer once and stays completed after reopen", async () => {
+  const f = await fixture();
+  const sent: string[] = [];
+  const models = createModels();
+  models.setProvider(f.faux.provider);
+  const open = () =>
+    openAssistant(f.config, {
+      models,
+      model: { provider: "faux", modelId: "faux-1" },
+      sendTelegram: async (value) => {
+        sent.push(value);
+      },
+    });
+  let assistant = await open();
+  try {
+    f.faux.setResponses([async () => {
+      // Real inference finishes after the delivery task has started waiting.
+      await pause(150);
+      return fauxAssistantMessage([
+        { type: "thinking", thinking: "Keep the response concise." },
+        { type: "text", text: "Here is your update." },
+      ]);
+    }]);
+    await (
+      await assistant.submit("Check in.", "delivery-test", true)
+    ).wait(context);
+    for (let i = 0; i < 100 && sent.length === 0; i++) await pause(10);
+    assert.deepEqual(sent, ["Here is your update."]);
+    // Allow the send receipt to commit before reopening.
+    for (let i = 0; i < 100; i++) {
+      const graph = await assistant.harness.taskGraph(context);
+      const active = Object.values(graph.value.tasks).some(
+        (t) => t.kind === "personal.telegram-delivery",
+      );
+      graph.dispose();
+      if (!active) break;
+      await pause(10);
+    }
+    await assistant.close();
+    assistant = await open();
+    await pause(50);
+    assert.deepEqual(sent, ["Here is your update."]);
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("thinking-only or blank model replies produce an explicit Telegram notice instead of silent success", async () => {
+  const f = await fixture();
+  const sent: { text: string; thread?: number }[] = [];
+  const assistant = await f.open(async (text, thread) => { sent.push({ text, thread }); });
+  try {
+    const topic = await assistant.telegramConversation(768);
+    for (const [index, response] of [
+      fauxAssistantMessage({ type: "thinking", thinking: "Private reasoning must not be sent." }, { stopReason: "length" }),
+      fauxAssistantMessage("   "),
+    ].entries()) {
+      f.faux.setResponses([response]);
+      assert.equal((await (await assistant.submit("Please answer.", `empty-reply-${index}`, true, true, topic)).wait(context)).status, "done");
+      for (let i = 0; i < 100 && sent.length <= index; i++) await pause(10);
+      assert.equal(sent.length, index + 1);
+      assert.equal(sent[index].thread, 768);
+      assert.ok(sent[index].text.trim().length > 0);
+      assert.ok(sent[index].text.includes("Your request isn't finished"));
+      assert.ok(!sent[index].text.includes("Private reasoning"));
+    }
+    assert.ok(sent[0].text.includes("response limit"));
+    assert.ok(sent[1].text.includes("without producing an answer"));
+  } finally { await assistant.close(); await f.cleanup(); }
+});
+
+test("configured search and extraction run through native tools without live services", async (t) => {
+  const f = await fixture();
+  f.config.searxngUrl = "https://search.invalid/";
+  f.config.firecrawlUrl = "https://extract.invalid";
+  f.config.firecrawlKey = "test-only-key";
+  const requests: string[] = [];
+  t.mock.method(globalThis, "fetch", async (
+    input: string | URL,
+    init?: RequestInit,
+  ) => {
+    const url = new URL(input);
+    requests.push(url.hostname);
+    if (url.hostname === "search.invalid") {
+      assert.equal(url.pathname, "/search");
+      assert.equal(url.searchParams.get("q"), "school deadlines");
+      assert.equal(url.searchParams.get("format"), "json");
+      return Response.json({
+        results: [{
+          title: "Assignments",
+          url: "https://school.invalid/tasks",
+          content: "Paper due Friday.",
+        }],
+      });
+    }
+    assert.equal(url.hostname, "extract.invalid");
+    assert.equal(url.pathname, "/v1/scrape");
+    assert.equal(init?.method, "POST");
+    assert.equal(
+      new Headers(init?.headers).get("Authorization"),
+      "Bearer test-only-key",
+    );
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      url: "https://school.invalid/tasks",
+      formats: ["markdown"],
+      onlyMainContent: true,
+    });
+    return Response.json({
+      success: true,
+      data: { markdown: "# Assignments\nPaper due Friday." },
+    });
+  });
+  const assistant = await f.open();
+  try {
+    f.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("web_search", { query: "school deadlines" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage(
+        fauxToolCall("web_extract", { url: "https://school.invalid/tasks" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("The paper is due Friday."),
+    ]);
+    const settled = await (
+      await assistant.submit("Find my deadline.", "web-setup-test")
+    ).wait(context);
+    assert.equal(settled.status, "done");
+    assert.deepEqual(requests, ["search.invalid", "extract.invalid"]);
+    const view = await assistant.root.context(context);
+    const results = view.messages.filter((message) => message.role === "toolResult");
+    assert.equal(results.length, 2);
+    assert.ok(results.every((result) => !result.isError));
+    assert.ok(JSON.stringify(results).includes("# Assignments"));
+    assert.ok(!JSON.stringify(results).includes("test-only-key"));
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("native bash can run the bundled Google CLI and the Gmail skill is installed", async () => {
+  const f = await fixture();
+  f.config.enableShell = true;
+  const assistant = await f.open();
+  try {
+    f.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("bash", { command: "gws --version" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Google CLI is available."),
+    ]);
+    const settled = await (
+      await assistant.submit("Check the Google CLI version.", "google-cli-test")
+    ).wait(context);
+    assert.equal(settled.status, "done");
+    const view = await assistant.root.context(context);
+    assert.ok(view.messages.some((message) =>
+      message.role === "toolResult" && message.toolName === "bash" &&
+      !message.isError && JSON.stringify(message.content).includes("gws 0.22.5"),
+    ));
+    assert.ok((await readFile(
+      join(assistant.workspace, "skills/gmail/SKILL.md"), "utf8",
+    )).includes("gws gmail +triage"));
+  } finally {
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("Telegram threads isolate history, share personal state, and retain wake routes across restart", async () => {
+  const f = await fixture();
+  const sent: { text: string; threadId?: number }[] = [];
+  const send = async (text: string, threadId?: number) => { sent.push({ text, threadId }); };
+  let assistant = await f.open(send);
+  const adapter = await tuiAdapter(assistant, f.config);
+  try {
+    const [school, other] = await Promise.all([
+      assistant.telegramConversation(101), assistant.telegramConversation(202),
+    ]);
+    assert.notEqual(school.id, other.id);
+    assert.equal((await assistant.telegramConversation(101)).id, school.id);
+    f.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("memory", {
+        action: "save", key: "preferences/time", text: "Prefers mornings.", pinned: true,
+      }), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("commitment", {
+        action: "save", id: "thread-reminder", title: "Review assignment",
+        wakeAt: new Date(Date.now() + 1000).toISOString(),
+      }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("School reply."),
+    ]);
+    await (await assistant.submit("SCHOOL-ONLY transcript", "thread-school", true, true, school)).wait(context);
+    f.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("memory", { action: "search", query: "mornings" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("commitment", { action: "list" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Other reply."),
+    ]);
+    await (await assistant.submit("OTHER-ONLY transcript", "thread-other", true, true, other)).wait(context);
+    const schoolContext = JSON.stringify((await school.context(context)).messages);
+    const otherContext = JSON.stringify((await other.context(context)).messages);
+    assert.ok(!schoolContext.includes("OTHER-ONLY"));
+    assert.ok(!otherContext.includes("SCHOOL-ONLY"));
+    assert.ok(otherContext.includes("Prefers mornings."));
+    assert.ok(otherContext.includes("Review assignment"));
+    assert.equal(adapter.source.current().conversations.length, 3);
+    await adapter.controller.switchConversation(other.id);
+    assert.equal(adapter.source.current().conversation.conversation.id, other.id);
+    assert.ok(JSON.stringify(adapter.source.current().conversation).includes("Other reply."));
+    for (let i = 0; i < 100 && sent.length < 2; i++) await pause(10);
+    assert.deepEqual(sent, [
+      { text: "School reply.", threadId: 101 },
+      { text: "Other reply.", threadId: 202 },
+    ]);
+    adapter.dispose();
+    await assistant.close();
+    f.faux.setResponses([fauxAssistantMessage("Scheduled school follow-up.")]);
+    assistant = await f.open(send);
+    assert.equal((await assistant.telegramConversation(101)).id, school.id);
+    for (let i = 0; i < 150 && sent.length < 3; i++) await pause(20);
+    assert.deepEqual(sent[2], { text: "Scheduled school follow-up.", threadId: 101 });
+    assert.equal((await assistant.personalState()).commitments[0].wakeAt, null);
+  } finally {
+    adapter.dispose();
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("Telegram gateway preserves topics on every reply chunk and admits only its owner", async (t) => {
+  const f = await fixture();
+  const requests: { chat_id: number | string; text: string; message_thread_id?: number }[] = [];
+  const actions: { chat: number | string; thread?: number }[] = [];
+  const bot = new Bot("123456:test-only-token", {
+    botInfo: {
+      id: 123456, is_bot: true, first_name: "Test", username: "testbot",
+      can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false,
+      can_connect_to_business: false, has_main_web_app: false, has_topics_enabled: true,
+      allows_users_to_create_topics: true, can_manage_bots: false, supports_join_request_queries: false,
+    },
+    client: { fetch: async () => { throw new Error("No network allowed in this test"); } },
+  });
+  t.mock.method(bot, "start", async () => {});
+  t.mock.method(Api.prototype, "sendChatAction", async (...[chat, action, options]: Parameters<typeof bot.api.sendChatAction>) => {
+    assert.equal(action, "typing");
+    actions.push({ chat, thread: options?.message_thread_id });
+    if (actions.length === 1) throw new Error("Simulated presence failure");
+    return true as const;
+  });
+  t.mock.method(Api.prototype, "sendMessage", async (
+    ...[chat_id, text, options]: Parameters<typeof bot.api.sendMessage>
+  ) => {
+    if (options?.disable_notification) return {
+      message_id: 9000, date: 0, chat: { id: 99, type: "private", first_name: "Owner" }, text,
+    };
+    requests.push({ chat_id, text, message_thread_id: options?.message_thread_id });
+    return {
+      message_id: requests.length, date: 0,
+      chat: { id: 99, type: "private", first_name: "Owner" }, text,
+    };
+  });
+  t.mock.method(Api.prototype, "editMessageText", async () => true as const);
+  const gateway = telegramGateway({ ...f.config, telegramToken: "test-only", telegramChat: "99" }, bot)!;
+  const assistant = await f.open(gateway.send);
+  try {
+    gateway.start(assistant);
+    const reply = "Reply text. ".repeat(400);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    f.faux.setResponses([async () => { await waiting; return fauxAssistantMessage(reply); }]);
+    const incoming = (owner: number, text: string, update_id: number) => ({
+      update_id,
+      message: {
+        message_id: update_id, date: 0, text, message_thread_id: 333,
+        chat: { id: owner, type: "private" as const, first_name: "Owner" },
+        from: { id: owner, is_bot: false, first_name: "Owner" },
+      },
+    });
+    await bot.handleUpdate(incoming(100, "Unauthorized", 1));
+    assert.equal(f.faux.state.callCount, 0);
+    assert.equal(actions.length, 0);
+    await bot.handleUpdate(incoming(99, "Hello", 2));
+    assert.equal(actions.length, 1);
+    await pause(4100);
+    assert.ok(actions.length >= 2, "Presence renews during a long request");
+    assert.ok(actions.every((a) => String(a.chat) === "99" && a.thread === 333));
+    release();
+    for (let i = 0; i < 150 && requests.length < 2; i++) await pause(10);
+    assert.equal(requests.length, 2);
+    assert.equal(requests.map((request) => request.text).join(""), reply);
+    assert.ok(requests.every((request) =>
+      String(request.chat_id) === "99" && request.message_thread_id === 333));
+    const completedActions = actions.length;
+    await pause(4100);
+    assert.equal(actions.length, completedActions, "Presence stops after completion");
+    await bot.handleUpdate(incoming(99, "/stop", 3));
+    assert.equal(requests[2].message_thread_id, 333);
+    assert.ok(requests[2].text.includes("Stopped"));
+  } finally {
+    await gateway.stop();
+    await assistant.close();
+    await f.cleanup();
+  }
+});
+
+test("one model stream serves multiple conversations, including cancellation while queued", async () => {
+  const faux = fauxProvider();
+  let release!: () => void;
+  let started!: () => void;
+  const waiting = new Promise<void>((resolve) => { release = resolve; });
+  const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+  let active = 0;
+  let peak = 0;
+  faux.setResponses([
+    async () => {
+      peak = Math.max(peak, ++active);
+      started();
+      await waiting;
+      active--;
+      return fauxAssistantMessage("First");
+    },
+    async () => {
+      peak = Math.max(peak, ++active);
+      active--;
+      return fauxAssistantMessage("Third");
+    },
+  ]);
+  const serial = singleStream(faux.provider);
+  const model = faux.getModel();
+  const transcript = normalizeContext({ messages: [] });
+  const first = serial.streamSimple(model, transcript);
+  await firstStarted;
+  const abort = new AbortController();
+  const second = serial.stream(model, transcript, { signal: abort.signal });
+  const third = serial.streamSimple(model, transcript);
+  abort.abort();
+  const stopped = await Promise.race([
+    second.result(), pause(500).then(() => { throw new Error("Queued cancellation stalled"); }),
+  ]);
+  assert.equal(stopped.stopReason, "error");
+  assert.equal(faux.state.callCount, 1);
+  release();
+  await Promise.all([first.result(), third.result()]);
+  assert.equal(faux.state.callCount, 2);
+  assert.equal(peak, 1);
+});
+
+test("Pi reasoning controls reach llama.cpp, refresh local models, and survive restart", async (t) => {
+  const f = await fixture();
+  const requests: { model: string; chat_template_kwargs: Record<string, unknown>; thinking_budget_tokens?: number; max_tokens: number }[] = [];
+  let catalog = ["bonsai-27b"];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.pathname.endsWith("/models"))
+      return Response.json({ data: catalog.map((id) => ({ id })) });
+    if (url.pathname === "/props") return Response.json({ modalities: { vision: true } });
+    assert.ok(url.pathname.endsWith("/chat/completions"));
+    requests.push(JSON.parse(String(init?.body)));
+    const chunks = [
+      { id: "test-reply", choices: [{ index: 0, delta: { role: "assistant", content: "READY" }, finish_reason: null }] },
+      { id: "test-reply", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    ];
+    return new Response(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n", {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const models = await localModels(f.config);
+  assert.ok(models.getModel("local", "bonsai-27b")?.input.includes("image"));
+  const open = () => openAssistant(f.config, { models });
+  let assistant = await open();
+  let adapter = await tuiAdapter(assistant, f.config);
+  try {
+    assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, "low");
+    for (const level of ["low", "medium", "xhigh", "off"]) {
+      assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, level);
+      assert.equal((await (await assistant.submit("Reply READY.")).wait(context)).status, "done");
+      assert.deepEqual(requests.at(-1)?.chat_template_kwargs, level === "off"
+        ? { enable_thinking: false }
+        : { enable_thinking: true, reasoning_effort: level });
+      assert.equal(requests.at(-1)?.thinking_budget_tokens,
+        ({ low: 512, medium: 2048, xhigh: 6144, off: undefined })[level]);
+      if (level !== "off") assert.ok(requests.at(-1)!.max_tokens - requests.at(-1)!.thinking_budget_tokens! >= 1024);
+      await adapter.controller.cycleThinking();
+    }
+    assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, "low");
+    catalog = ["bonsai-27b", "second-local-model"];
+    await adapter.controller.refreshModels();
+    assert.equal(adapter.source.current().models.length, 2);
+    assert.ok(adapter.source.current().models.every((model) => model.provider === "local"));
+    await adapter.controller.setModel({ provider: "local", modelId: "second-local-model" });
+    await adapter.controller.cycleThinking();
+    const topic = await assistant.telegramConversation(404);
+    await adapter.controller.switchConversation(topic.id);
+    assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, "low");
+    await adapter.controller.cycleThinking();
+    adapter.dispose();
+    await assistant.close();
+    assistant = await open();
+    adapter = await tuiAdapter(assistant, f.config);
+    assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, "medium");
+    assert.equal(agentOf(adapter.source.current().conversation).model?.modelId, "second-local-model");
+    await adapter.controller.switchConversation(topic.id);
+    assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, "medium");
+    assert.equal((await (await assistant.submit("Reply READY.")).wait(context)).status, "done");
+    assert.equal(requests.at(-1)?.model, "second-local-model");
+  } finally {
+    adapter.dispose();
+    await assistant.close();
+    await f.cleanup();
+  }
+});
