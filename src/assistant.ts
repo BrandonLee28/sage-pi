@@ -294,6 +294,16 @@ export async function openAssistant(
         section("instructions_file", () =>
           readFile(join(workspace, "AGENTS.md"), "utf8"),
         ),
+        section("telegram_reply_style", () => options.sendTelegram
+          ? "User-facing replies are delivered as Telegram texts. Write like you are texting the user: " +
+            "natural, warm, concise sentences in short paragraphs. Match their conversational tone without forcing slang. " +
+            "Use plain text, including for scheduled check-ins. Avoid Markdown headings, bold, tables, code fences, " +
+            "JSON, raw tool output, and internal agent details in chat. Use a short plain-text list only when it helps. " +
+            "Keep structured data, code, and long formatted reports in workspace files; give a brief conversational " +
+            "summary and the saved path in chat. Only say a file was sent or attached after a tool confirms delivery. " +
+            "If the user explicitly requests a particular format inline, follow that request. " +
+            "This changes user-facing wording only; preserve tool arguments and file contents in their required formats."
+          : undefined),
         section("skills", async () => {
           const folders = await readdir(join(workspace, "skills"), {
             withFileTypes: true,
