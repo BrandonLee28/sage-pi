@@ -244,9 +244,17 @@ follow-up offers. Edit this file to tune the voice; changes load on the next mod
 request. Startup seeds it from `instructions/TELEGRAM.md` without overwriting an
 existing copy. It applies to the shared TUI conversations too.
 
+`TELEGRAM-BREVITY.md` adds the default of 1–3 short sentences, usually under 60
+words: answer the current point and give at most one useful next step. It is seeded
+into existing workspaces without changing their `TELEGRAM.md`. Full recaps,
+repeated schedules, and extra alternative plans are discouraged; requested detail
+and complete lists are still allowed.
+
 If a final draft contains common Markdown (bold markers, headings, code fences,
 or formatted web links) or a JSON object/array, a native Pi `onYield` hook asks for
-one plain-text rewrite before delivery. Tools are unavailable during that correction
+one plain-text rewrite before delivery. Plain-text drafts over 80 words also get
+one shortening request, with an exception in the instruction for explicitly
+requested detail or complete lists. Tools are unavailable during that correction
 so it cannot repeat actions. Common explicit requests such as “reply in JSON” opt
 out. The retry stops after one attempt even if the model still ignores the style;
 this is a limited correction, not a full Markdown parser or a tone guarantee.
@@ -255,7 +263,8 @@ The gateway itself does not rewrite replies, and status bubbles are unaffected.
 To inspect actual wording with your configured model, opt in locally with
 `node --env-file-if-exists=.env test/telegram-style.live.ts`. It uses a disposable
 workspace and a supplied test agenda, disables tools, and never contacts Telegram
-or your calendar. It prints the replies for tone review and checks plain formatting.
+or your calendar. It prints the replies for tone review and checks plain formatting
+and the length of an ordinary planning response.
 
 Structured data, code, and long reports belong in workspace files with a brief
 chat summary and saved path. Outbound file attachments are not yet supported, so
