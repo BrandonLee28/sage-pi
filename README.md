@@ -338,12 +338,14 @@ first used; the existing main transcript stays in the main conversation. Unthrea
 Telegram messages use main. Use `/agents` in the TUI to inspect a thread or work in
 it. Send the bot a message first so it can deliver proactive updates.
 Telegram receives the completed reply; the TUI can show text while it streams.
-With Telegram delivery enabled, `data/workspace/TELEGRAM.md` supplies a native
+For inputs that request Telegram delivery, `data/workspace/TELEGRAM.md` supplies a native
 system-prompt section for short, natural plain-text replies and scheduled check-ins.
 It gives a concrete schedule example and discourages forced slang and unsolicited
 follow-up offers. Edit this file to tune the voice; changes load on the next model
 request. Startup seeds it from `instructions/TELEGRAM.md` without overwriting an
-existing copy. It applies to the shared TUI conversations too.
+existing copy. TUI-only inputs skip both Telegram prompt sections and the rewrite
+hook, even in main or a Telegram topic. This follows the active native run and
+survives queued inputs and restarts.
 
 `TELEGRAM-BREVITY.md` adds the default of 1–3 short sentences, usually under 60
 words: answer the current point and give at most one useful next step. It is seeded
@@ -359,7 +361,8 @@ requested detail or complete lists. Tools are unavailable during that correction
 so it cannot repeat actions. Common explicit requests such as “reply in JSON” opt
 out. The retry stops after one attempt even if the model still ignores the style;
 this is a limited correction, not a full Markdown parser or a tone guarantee.
-The TUI can show the original draft and the correction in its native transcript.
+When viewing a Telegram reply, the TUI can show the original draft and the
+correction in its native transcript.
 The gateway itself does not rewrite replies, and status bubbles are unaffected.
 To inspect actual wording with your configured model, opt in locally with
 `node --env-file-if-exists=.env test/telegram-style.live.ts`. It uses a disposable
