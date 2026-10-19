@@ -12,7 +12,7 @@ import { entryText } from "../extensions/recall.ts";
 
 async function fixture() {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-recall-"));
-  const config = { ...readConfig(), dataDir, enableShell: true, telegramToken: "", telegramChat: "",
+  const config = { ...readConfig(), dataDir, mcpServers: {}, enableShell: true, telegramToken: "", telegramChat: "",
     searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "", appleId: "", appleAppPassword: "", appleCalendarUrl: "" };
   const faux = fauxProvider(), models = createModels();
   models.setProvider(faux.provider);

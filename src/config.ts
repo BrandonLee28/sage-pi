@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { readSettings } from "./settings.ts";
 
 function integer(
   name: string,
@@ -13,6 +14,8 @@ function integer(
 }
 
 export function readConfig() {
+  const dataDir = resolve(process.env.DATA_DIR ?? "./data");
+  const settings = readSettings(dataDir);
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
   const telegramChat = process.env.TELEGRAM_CHAT_ID ?? "";
   if (Boolean(telegramToken) !== Boolean(telegramChat))
@@ -29,11 +32,13 @@ export function readConfig() {
     telegramChat,
     contextWindow,
     maxTokens,
-    dataDir: resolve(process.env.DATA_DIR ?? "./data"),
+    dataDir,
+    modelRevision: settings.model?.revision,
+    mcpServers: settings.mcpServers ?? {},
     baseUrl: (
-      process.env.LLM_BASE_URL ?? "http://100.94.249.19:8080/v1"
+      settings.model?.baseUrl ?? process.env.LLM_BASE_URL ?? "http://100.94.249.19:8080/v1"
     ).replace(/\/$/, ""),
-    modelId: process.env.LLM_MODEL ?? "bonsai-27b",
+    modelId: settings.model?.id ?? process.env.LLM_MODEL ?? "bonsai-27b",
     apiKey: process.env.LLM_API_KEY ?? "",
     enableShell: process.env.ENABLE_SHELL !== "false",
     searxngUrl: process.env.SEARXNG_URL ?? "",
