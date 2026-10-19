@@ -264,6 +264,9 @@ The profile occupies context on every request. Only its first 2,000 characters
 (JavaScript string length, not a token count) are automatically included, plus a
 short notice when truncated. The full file stays intact and can be read with the
 native `read` tool when relevant. Empty or missing profiles add no profile section.
+The section explicitly identifies `USER.md` as the shared profile file, including
+in older workspaces whose `AGENTS.md` has no profile guidance. Other filenames,
+such as `user_profile.md`, are ordinary files and are not automatically loaded.
 Keep the most useful facts first and use memory for details, avoiding duplicate
 pinned facts. Pi refreshes the same prompt section instead of appending the profile
 as a new chat message each turn. Profile edits can still accumulate system changes

@@ -359,8 +359,11 @@ test("USER.md is seeded, refreshes across conversations, and preserves edits on 
     f.faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage("Hello.")));
     const original = "# User\nPreferred name: Test User.\nUse one clear next action.";
     await writeFile(profilePath, original);
+    // Existing workspaces may predate the USER.md guidance in the AGENTS.md template.
+    await writeFile(join(assistant.workspace, "AGENTS.md"), "Keep replies short.");
     assert.equal((await (await assistant.submit("Hello.")).wait(context)).status, "done");
     assert.ok((await prompt()).includes(original));
+    assert.ok((await prompt()).includes("Profile file: USER.md (shared across conversations). Update this file only when the user asks."));
 
     const updated = "# User\nPreferred name: Test User.\nUse short numbered steps.";
     await writeFile(profilePath, updated);
@@ -370,6 +373,7 @@ test("USER.md is seeded, refreshes across conversations, and preserves edits on 
     const topic = await assistant.telegramConversation(45);
     assert.equal((await (await assistant.submit("Hello from a topic.", undefined, false, true, topic)).wait(context)).status, "done");
     assert.ok(getCurrentSystemPrompt((await topic.context(context)).messages).includes(updated));
+    assert.ok(getCurrentSystemPrompt((await topic.context(context)).messages).includes("Profile file: USER.md"));
 
     await assistant.close();
     assistant = await f.open();
