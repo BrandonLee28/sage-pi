@@ -24,6 +24,7 @@ import {
 	Text,
 	TruncatedText,
 	TuiAltScreen,
+	type Terminal,
 	VStack,
 } from "@earendil-works/pi-tui";
 import { getAgentDir } from "../../node_modules/@earendil-works/pi-coding-agent/dist/config.js";
@@ -31,7 +32,6 @@ import { KeybindingsManager } from "../../node_modules/@earendil-works/pi-coding
 import type { SettingsManager } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js";
 import { createAllToolRenderers } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/renderers/index.js";
 import { AssistantMessageComponent } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/assistant-message.js";
-import { CustomEditor } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/custom-editor.js";
 import { formatTokens } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/footer.js";
 import { keyText } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/keybinding-hints.js";
 import { type StatusIndicator, WorkingStatusIndicator } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/status-indicator.js";
@@ -39,7 +39,7 @@ import { ToolExecutionComponent, type ToolRenderers } from "../../node_modules/@
 import { UserMessageComponent } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/user-message.js";
 import { getEditorTheme, getMarkdownTheme, theme } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { InteractiveThemeController } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-controller.js";
-import { SageHeader, SagePicker, registerSageTheme } from "../../src/cli-ui.ts";
+import { SageEditor, SageFooter, SageHeader, SagePicker, registerSageTheme } from "../../src/cli-ui.ts";
 import { agentOf, type DurableController, type DurableView, type DurableViewSource } from "../../src/tui-adapter.ts";
 
 /** The summary that replaced earlier context: collapsed to one line until expanded. */
@@ -81,20 +81,17 @@ interface Handlers {
 	cycleThinking(): void;
 }
 
-class DurableTui {
+export class DurableTui {
 	static readonly #renderers: Record<string, ToolRenderers> = createAllToolRenderers();
 	readonly #ui: TuiAltScreen;
 	readonly #chat = new Container();
 	readonly #header = new SageHeader();
-	readonly #topbar = new Text("", 1, 0);
 	readonly #tasks = new Container();
 	readonly #queue = new Container();
 	readonly #notices = new Container();
-	readonly #footer = new Container();
-	readonly #footerStats = new Text("", 1, 0);
-	readonly #footerHints = new Text("", 1, 0);
+	readonly #footer = new SageFooter();
 	readonly #editorContainer = new Container();
-	readonly #editor: CustomEditor;
+	readonly #editor: SageEditor;
 	readonly #cwd: string;
 	/** The newest card per call ID; provider call IDs may repeat across turns. */
 	readonly #tools = new Map<string, ToolExecutionComponent>();
@@ -113,13 +110,13 @@ class DurableTui {
 	#rebuilt = false;
 	#transcript: ScrollView;
 
-	constructor(cwd: string, handlers: Handlers) {
+	constructor(cwd: string, handlers: Handlers, terminal: Terminal = new ProcessTerminal()) {
 		this.#cwd = cwd;
-		this.#ui = new TuiAltScreen(new ProcessTerminal(), false, getAgentDir());
+		this.#ui = new TuiAltScreen(terminal, false, getAgentDir());
 		const keybindings = KeybindingsManager.create();
 		setKeybindings(keybindings);
-		this.#editor = new CustomEditor(this.#ui, getEditorTheme(), keybindings, {
-			paddingX: 1,
+		this.#editor = new SageEditor(this.#ui, getEditorTheme(), keybindings, {
+			paddingX: 4,
 			embedWorkingStatus: true,
 		});
 		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
@@ -148,11 +145,8 @@ class DurableTui {
 		});
 
 		this.#editorContainer.addChild(this.#editor);
-		this.#footer.addChild(this.#footerStats);
-		this.#footer.addChild(this.#footerHints);
 		// One empty line between the transcript and everything below it.
 		const content = new Container();
-		content.addChild(this.#header);
 		content.addChild(this.#chat);
 		content.addChild(new Spacer(1));
 		const transcript = new ScrollView(content, { follow: "end", primary: true, overscroll: "chain" });
@@ -165,7 +159,7 @@ class DurableTui {
 			{ component: this.#footer, shrink: 1, minSize: 0 },
 		]);
 		for (const component of [
-			this.#topbar,
+			this.#header,
 			this.#chat,
 			this.#tasks,
 			this.#queue,
@@ -177,7 +171,7 @@ class DurableTui {
 		}
 		this.#ui.setLayoutRoot(
 			new VStack([
-				{ component: this.#topbar, basis: "auto", shrink: 1, minSize: 0 },
+				{ component: this.#header, basis: "auto", shrink: 1, minSize: 0 },
 				{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 				{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
 			]),
@@ -220,7 +214,6 @@ class DurableTui {
 
 	apply(view: DurableView): void {
 		const live = (view.conversation.docs["pi.live"] ?? {}) as LiveState;
-		this.#header.details = { model: agentOf(view.conversation).model?.modelId, cwd: view.session.cwd };
 		this.#syncTranscript(view.conversation.entries);
 		const message = live.generation?.message as AssistantMessage | undefined;
 		// A partial without its entry was dropped, for example by a retry: render the transcript again.
@@ -330,23 +323,25 @@ class DurableTui {
 		const contextWindow =
 			view.models.find((model) => model.provider === agent.model?.provider && model.modelId === agent.model.modelId)
 				?.contextWindow ?? 0;
+		this.#footer.context = "";
+		this.#footer.contextWarning = false;
 		if (contextWindow > 0) {
 			const tokens = contextTokens(view.conversation.entries);
 			const percent = tokens === undefined ? undefined : (tokens / contextWindow) * 100;
 			const text = `${percent === undefined ? "?" : percent.toFixed(1)}%/${formatTokens(contextWindow)}`;
-			stats.push(percent !== undefined && percent > 90 ? theme.fg("error", text) : text);
+			this.#footer.context = text;
+			this.#footer.contextWarning = percent !== undefined && percent > 90;
 		}
-		this.#footerStats.setText(theme.fg("dim", stats.join("  ")));
-		const model = agent.model === undefined ? "no model" : `${agent.model.provider}/${agent.model.modelId}`;
+		this.#footer.usage = stats.join("  ");
+		this.#footer.model = agent.model?.modelId ?? "no model";
+		this.#footer.thinking = agent.thinkingLevel ?? "off";
 		const shown = view.conversations.find((candidate) => candidate.id === view.conversation.conversation.id);
 		const label = shown?.label ?? `conversation ${view.conversation.conversation.id}`;
-		this.#topbar.setText(theme.bold("sage") + theme.fg("dim", ` / ${label}  ·  $${usage.cost.total.toFixed(3)}`));
-		this.#footerHints.setText(
-			`${theme.fg(label === "main" ? "dim" : "accent", label)}${theme.fg(
-				"dim",
-				` · ${model} · ${agent.thinkingLevel ?? "off"} (${keyText("app.thinking.cycle")}) · /model · /agents · /help`,
-			)}`,
-		);
+		this.#header.details = {
+			section: `${label} · $${usage.cost.total.toFixed(3)}`,
+			model: agent.model?.modelId,
+			cwd: view.session.cwd,
+		};
 	}
 
 	#syncTranscript(entries: readonly EntryRecord[]): void {

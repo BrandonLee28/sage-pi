@@ -59,7 +59,9 @@ Run `npm link` once in this checkout to make `sage` available on your PATH.
 Without linking, use `npm run sage -- <command>`. The launcher reads this checkout's
 `.env` and resolves relative `DATA_DIR` paths from here, even when called elsewhere.
 `sage` opens the existing Pi TUI with a compact Sage wordmark and model/workspace
-header. `sage setup` opens the matching setup menu. Use **↑/↓** to move,
+header that remains visible above saved chat history. The chat composer uses a
+shaded `>` prompt with native Pi editing and a model/context tray underneath.
+`sage setup` opens the matching setup menu. Use **↑/↓** to move,
 **Enter** to select, type to filter, and **Esc** to cancel. Model and conversation
 pickers inside chat use the same design; type `/` to discover chat commands.
 The muted palette and selection bands are adapted from

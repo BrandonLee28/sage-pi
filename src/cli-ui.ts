@@ -6,6 +6,7 @@ import {
   fuzzyFilter, getKeybindings, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth,
   type Component, type Focusable, type SelectItem,
 } from "@earendil-works/pi-tui";
+import { CustomEditor } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/custom-editor.js";
 import {
   initTheme, loadThemeFromPath, setRegisteredThemes, theme,
 } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
@@ -46,6 +47,54 @@ export class SageHeader implements Component {
       const left = logo ? theme.fg("text", (wordmark[row] ?? "").padEnd(logoWidth) + "   ") : "";
       return truncateToWidth(" " + left + truncateToWidth(metadata[row - offset] ?? "", budget), width);
     }), ""];
+  }
+}
+
+/** Skin Pi's editor; native editing, cursor positions, history and completion stay intact. */
+export class SageEditor extends CustomEditor {
+  protected override renderTopBorder(width: number, hidden: number) {
+    return super.renderTopBorder(width, hidden).replace(/─/g, " ");
+  }
+  protected override renderBottomBorder(width: number, hidden: number) {
+    return super.renderBottomBorder(width, hidden).replace(/─/g, " ");
+  }
+  override render(width: number): string[] {
+    const padding = Math.min(this.getPaddingX(), Math.max(0, Math.floor((width - 1) / 2)));
+    return super.render(width).map((original, index) => {
+      let row = original;
+      if (index === 1 && padding > 0) {
+        row = theme.fg("muted", " > ".padEnd(padding).slice(0, padding)) + row.slice(padding);
+        if (!this.getText() && width > 20) {
+          row = row.trimEnd() + theme.fg("dim", "Ask Sage anything…");
+          row = truncateToWidth(row, width);
+          row += " ".repeat(Math.max(0, width - visibleWidth(row)));
+        }
+      }
+      return theme.bg("userMessageBg", row);
+    });
+  }
+}
+
+export class SageFooter implements Component {
+  model = "";
+  thinking = "off";
+  context = "";
+  contextWarning = false;
+  usage = "";
+  invalidate() {}
+  render(width: number): string[] {
+    const inner = Math.max(1, width - 2);
+    const row = (left: string, right: string) => {
+      right = truncateToWidth(right, inner);
+      const remaining = inner - visibleWidth(right) - 2;
+      left = remaining > 0 ? truncateToWidth(left, remaining) : "";
+      const gap = " ".repeat(Math.max(0, inner - visibleWidth(left) - visibleWidth(right)));
+      return truncateToWidth(" " + theme.fg("dim", left + gap + right), Math.max(1, width));
+    };
+    return [
+      row("/ commands · shift+tab effort", `${clean(this.model)}:${clean(this.thinking)}${this.context ? " · " + (this.contextWarning ? theme.fg("error", clean(this.context)) : clean(this.context)) : ""}`),
+      row("enter send · alt+enter queue · esc stop", clean(this.usage)),
+    ];
   }
 }
 

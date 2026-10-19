@@ -17,7 +17,12 @@ Local adaptations:
 - Render `personal.scheduled` inputs alongside regular user inputs.
 - Refresh the local provider's model catalog before opening its model picker.
 - Use Sage's compact brand header, Prime-derived palette, and shared Pi pickers
-  from `src/cli-ui.ts`; show a small conversation bar and shorter footer hints.
+  from `src/cli-ui.ts`. Pin the header outside the transcript so it stays visible
+  when reopening a long chat, and align model/context and shortcuts below the input.
+- Skin Pi's native `CustomEditor` with a shaded `> ` composer and placeholder.
+  Its protected border-rendering hooks retain working/scroll status while removing
+  the horizontal rules. Editing, mouse coordinates, history, paste, and completion
+  remain native; the four-column input padding reserves space for the prompt.
 - Offer the existing slash commands through Pi's native autocomplete and hide an
   empty task panel. Editor, message/tool rendering, and execution stay upstream.
 
