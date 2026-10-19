@@ -238,11 +238,20 @@ the TUI and every Telegram thread.
 `instructions/` contains first-run templates; startup preserves existing workspace
 edits. See [extensions/README.md](extensions/README.md) for a native Pi tool example.
 
-The default voice is playful, affectionate uwu speech, with occasional stutters
-and frequent kaomoji. Technical literals and factual names stay exact. For an
-existing workspace, edit `data/workspace/SOUL.md` using `instructions/SOUL.md` as
-the reference; update `data/workspace/TELEGRAM.md` from its template too if you use
-Telegram. Keep any personal edits you want. The next model request picks them up.
+The personality section in `instructions/SOUL.md` is copied verbatim from the
+`kawaii` entry in [Hermes Agent's built-in personalities](https://github.com/NousResearch/hermes-agent/blob/ddabd3837862022a6053331fe3ba97cf9716b9e3/hermes_cli/personality.py#L22)
+(commit `ddabd3837862022a6053331fe3ba97cf9716b9e3`). Hermes defines it as a
+personality preset, not a separate SOUL.md file. It is distinct from its `uwu`
+preset. The text is unmodified, with the upstream [MIT license](vendor/hermes-personality/LICENSE)
+retained. Sage keeps its own identity and the original accountability and trust
+guidance, with normal spelling in the accountability example. Other custom voice
+and playfulness instructions are removed. Telegram follows SOUL.md for personality.
+
+For an existing workspace, edit `data/workspace/SOUL.md` using
+`instructions/SOUL.md` as the reference; update `data/workspace/TELEGRAM.md` from
+its template too if you use Telegram. Keep any personal edits you want. Updating
+the templates alone does not change an existing workspace. The next model request
+picks up edits to the runtime files.
 
 Keep `USER.md` to a few user-confirmed facts: preferred name, communication needs,
 enduring goals, and useful constraints. The template contains no personal facts.
