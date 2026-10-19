@@ -143,6 +143,12 @@ the TUI and every Telegram thread.
 `instructions/` contains first-run templates; startup preserves existing workspace
 edits. See [extensions/README.md](extensions/README.md) for a native Pi tool example.
 
+The default voice is playful, affectionate uwu speech, with occasional stutters
+and frequent kaomoji. Technical literals and factual names stay exact. For an
+existing workspace, edit `data/workspace/SOUL.md` using `instructions/SOUL.md` as
+the reference; update `data/workspace/TELEGRAM.md` from its template too if you use
+Telegram. Keep any personal edits you want. The next model request picks them up.
+
 Keep `USER.md` to a few user-confirmed facts: preferred name, communication needs,
 enduring goals, and useful constraints. The template contains no personal facts.
 Edit it yourself or explicitly ask Sage to update it. The new template is also
