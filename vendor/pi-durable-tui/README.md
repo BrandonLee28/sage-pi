@@ -14,7 +14,7 @@ Local adaptations:
 - Resolve its existing helper imports to their installed compiled package files.
 - Import its view/controller contract from `src/tui-adapter.ts` instead of the
   demo's model/session setup.
-- Render `personal.scheduled` inputs alongside regular user inputs.
+- Render `personal.telegram` and `personal.scheduled` inputs alongside regular user inputs.
 - Refresh the local provider's model catalog before opening its model picker.
 - Use Sage's compact brand header, Prime-derived palette, and shared Pi pickers
   from `src/cli-ui.ts`. Pin the header outside the transcript so it stays visible
