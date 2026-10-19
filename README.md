@@ -237,15 +237,30 @@ first used; the existing main transcript stays in the main conversation. Unthrea
 Telegram messages use main. Use `/agents` in the TUI to inspect a thread or work in
 it. Send the bot a message first so it can deliver proactive updates.
 Telegram receives the completed reply; the TUI can show text while it streams.
-With Telegram delivery enabled, a native system-prompt section asks Sage to write
-like a text conversation: short, natural plain-text replies, including scheduled
-check-ins. Markdown, JSON, code, and long formatted reports belong in workspace
-files with a brief chat summary and saved path, unless you explicitly request a
-format inline. The gateway sends the model's reply unchanged; this is a standing
-instruction, not a saved memory or a formatting filter. It applies to the shared
-TUI conversations too. Existing runtime instruction files are preserved; restart
-Sage after updating to load this section. Outbound file attachments are not yet
-supported, so a saved file is not automatically uploaded to Telegram.
+With Telegram delivery enabled, `data/workspace/TELEGRAM.md` supplies a native
+system-prompt section for short, natural plain-text replies and scheduled check-ins.
+It gives a concrete schedule example and discourages forced slang and unsolicited
+follow-up offers. Edit this file to tune the voice; changes load on the next model
+request. Startup seeds it from `instructions/TELEGRAM.md` without overwriting an
+existing copy. It applies to the shared TUI conversations too.
+
+If a final draft contains common Markdown (bold markers, headings, code fences,
+or formatted web links) or a JSON object/array, a native Pi `onYield` hook asks for
+one plain-text rewrite before delivery. Tools are unavailable during that correction
+so it cannot repeat actions. Common explicit requests such as “reply in JSON” opt
+out. The retry stops after one attempt even if the model still ignores the style;
+this is a limited correction, not a full Markdown parser or a tone guarantee.
+The TUI can show the original draft and the correction in its native transcript.
+The gateway itself does not rewrite replies, and status bubbles are unaffected.
+To inspect actual wording with your configured model, opt in locally with
+`node --env-file-if-exists=.env test/telegram-style.live.ts`. It uses a disposable
+workspace and a supplied test agenda, disables tools, and never contacts Telegram
+or your calendar. It prints the replies for tone review and checks plain formatting.
+
+Structured data, code, and long reports belong in workspace files with a brief
+chat summary and saved path. Outbound file attachments are not yet supported, so
+a saved file is not automatically uploaded to Telegram. Restart Sage after updating
+to load the new hook and instruction template.
 Telegram shows “typing…” while Sage handles your message, including uploads and
 tool work, with renewal in the originating topic. Presence stops on completion,
 `/stop`, or gateway shutdown; a presence API failure does not prevent the reply.
