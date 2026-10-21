@@ -9,16 +9,13 @@
   },
   "scripts": {
     "sage": "node bin/sage.mjs",
-    "connect": "node bin/sage.mjs connect",
-    "start": "node bin/sage.mjs",
-    "dev": "node bin/sage.mjs",
-    "gateway": "node bin/sage.mjs gateway",
-    "daemon": "node bin/sage.mjs gateway",
+    "start": "node --env-file-if-exists=.env src/cli.ts",
+    "dev": "node --env-file-if-exists=.env src/cli.ts",
+    "daemon": "node --env-file-if-exists=.env src/cli.ts --headless",
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
-    "test:docker": "node test/docker.ts",
-    "voice:setup": "node scripts/setup-voice.ts",
-    "voice:try": "node bin/sage.mjs connect",
+    "voice:setup": "node --env-file-if-exists=.env scripts/setup-voice.ts",
+    "voice:try": "node --env-file-if-exists=.env scripts/try-voice.ts",
     "test:live": "node --env-file-if-exists=.env test/live.ts"
   },
   "dependencies": {
