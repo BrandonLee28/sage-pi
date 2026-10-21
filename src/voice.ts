@@ -91,12 +91,19 @@ export function localVoice(config: Pick<Config, "dataDir">, events: (event: Voic
             createInterface({ input: device.stdout }).on("line", (line) => {
               if (closed) return;
               try {
-                const input = JSON.parse(line) as VoiceEvent | { type: "mic"; pcm: string };
+                const input = JSON.parse(line) as VoiceEvent | { type: "mic"; pcm: string }
+                  | { type: "audio_played"; epoch: number; frames: number };
+                if (input.type === "ready" && (!("playbackCredits" in input) || input.playbackCredits !== true)) {
+                  events({ type: "error", message: "Native voice audio is outdated. Run npm run voice:setup, then restart /speak." });
+                  return;
+                }
                 if (input.type === "mic") {
                   if (!send(input)) {
                     device!.stdout.pause();
                     worker?.stdin.once("drain", () => device?.stdout.resume());
                   }
+                } else if (input.type === "audio_played") {
+                  if (input.epoch === epoch) send({ type: "played", epoch, frames: input.frames });
                 } else if (input.type !== "audio_end" || input.epoch === epoch) events(input);
               } catch { events({ type: "error", message: "Invalid native audio output." }); }
             });
