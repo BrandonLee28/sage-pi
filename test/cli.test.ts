@@ -12,6 +12,31 @@ import { readSettings, saveSettings } from "../src/settings.ts";
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
+test("Mac voice model setup persists beside the connection without opening server storage", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sage-client-voice-"));
+  const client = join(directory, "client"), server = join(directory, "server");
+  const model = join(directory, "speech model");
+  const run = (...args: string[]) => exec(process.execPath, [cli, "voice", ...args], {
+    env: { ...process.env, CLIENT_DATA_DIR: client, DATA_DIR: server },
+  });
+  try {
+    await saveSettings(client, { gateway: { url: "http://localhost:8787", token: "test-token".repeat(4) } });
+    await mkdir(model);
+    await assert.rejects(run("model", model), /missing config.json/);
+    for (const name of ["config.json", "tokenizer.json", "model.q8.gguf", "default-voice.safetensors"])
+      await writeFile(join(model, name), "fixture");
+    await run("model", model);
+    assert.equal(readSettings(client).voice?.ttsModel, model);
+    assert.equal(readSettings(client).gateway?.url, "http://localhost:8787");
+    await run("model", "hf://gradium/phonon-40m-en");
+    assert.equal(readSettings(client).voice?.ttsModel, "hf://gradium/phonon-40m-en");
+    await assert.rejects(run("model"), /Usage/);
+    await assert.rejects(access(server), { code: "ENOENT" });
+    await writeFile(join(client, "settings.json"), JSON.stringify({ voice: { ttsModel: 42 } }));
+    assert.throws(() => readSettings(client), /Invalid saved voice model/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("client launch ignores server dotenv configuration and all normal npm commands use the same launcher", async () => {
   const directory = await mkdtemp(join(tmpdir(), "sage-client-launch-"));
   try {

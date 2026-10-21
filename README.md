@@ -258,13 +258,16 @@ the website into one folder, retaining their names:
 - `model.q8.gguf`
 - `default-voice.safetensors`
 
-For a downloaded model, set the local `VOICE_TTS_MODEL` variable to that folder:
+For a downloaded model, save its folder once on the Mac:
 
 ```sh
-VOICE_TTS_MODEL="/absolute/path/to/phonon-40m-en" npm run voice:try
+sage voice model "/absolute/path/to/phonon-40m-en"
+npm run sage
 ```
 
-`voice:try` opens the same gateway TUI as `sage connect`; enter `/speak` to start
+The model path is saved in `~/.sage/settings.json` with your gateway connection.
+`VOICE_TTS_MODEL` still overrides it when supplied in the shell; the Mac client
+does not load the server `.env`. `voice:try` opens the same gateway TUI as `sage connect`; enter `/speak` to start
 local audio. It creates no local chat or workspace. Use `/new` first if you want a
 separate saved test conversation on the gateway. Hugging Face browser login and
 the Codex connector are separate from speech subprocess authentication; a local

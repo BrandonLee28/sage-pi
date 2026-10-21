@@ -1,11 +1,21 @@
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { clientDataDir, gatewayUrl, readSettings, saveSettings } from "./settings.ts";
 
 const args = process.argv.slice(2);
 const clientDir = clientDataDir();
 if (!args.length || (args.length === 1 && args[0] === "setup")) args.splice(0, args.length, "connect");
-if (args[0] === "connect") {
+if (args[0] === "voice") {
+  if (args.length !== 3 || args[1] !== "model" || !args[2]?.trim())
+    throw new Error("Usage: sage voice model /path/to/phonon-40m-en (or hf://gradium/phonon-40m-en)");
+  const ttsModel = args[2].startsWith("hf://") ? args[2] : resolve(args[2]);
+  if (!ttsModel.startsWith("hf://")) {
+    for (const file of ["config.json", "tokenizer.json", "model.q8.gguf", "default-voice.safetensors"])
+      await access(join(ttsModel, file)).catch(() => { throw new Error(`Voice model is missing ${file} in ${ttsModel}.`); });
+  }
+  await saveSettings(clientDir, { ...readSettings(clientDir), voice: { ttsModel } });
+  console.log(`Mac voice model saved: ${ttsModel}. Restart Sage, then enter /speak.`);
+} else if (args[0] === "connect") {
   if (args.length > 2) throw new Error("Usage: sage connect [http://gateway:8787 | --forget]");
   const settings = readSettings(clientDir);
   if (args[1] === "--forget") {

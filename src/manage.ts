@@ -23,6 +23,7 @@ sage --headless              Alias for sage gateway (server only)
 sage gateway                 Run the persistent gateway (LAN/Tailscale API)
 sage connect [URL]           Connect and remember a gateway; prompt for token once
 sage connect --forget        Remove the saved client connection
+sage voice model PATH        Remember the Mac speech model folder (or hf:// URL)
 
 Settings: DATA_DIR/settings.json. Secrets stay in .env/environment.
 Client connection/token: CLIENT_DATA_DIR/settings.json (default ~/.sage), owner-only.

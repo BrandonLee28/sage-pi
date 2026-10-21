@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
+import { readSettings } from "./settings.ts";
 
 /** Feed only model text, never thinking or tool arguments. Bound chunks to limit queued speech. */
 export class SpokenPhrases {
@@ -76,7 +77,7 @@ export function localVoice(config: Pick<Config, "dataDir">, events: (event: Voic
       await mkdir(directory, { recursive: true });
       if (closed) return;
       const args = ["-u", fileURLToPath(new URL("../scripts/voice-worker.py", import.meta.url)),
-        "--tts-model", process.env.VOICE_TTS_MODEL ?? "hf://gradium/phonon-40m-en",
+        "--tts-model", process.env.VOICE_TTS_MODEL ?? readSettings(config.dataDir).voice?.ttsModel ?? "hf://gradium/phonon-40m-en",
         "--asr-model", process.env.VOICE_ASR_MODEL ?? join(directory, "parakeet-unified-en-0.6b"), "--cache-dir", directory,
         "--silence-ms", String(silence), "--voice", process.env.VOICE_TTS_VOICE ?? ""];
       worker = launch(python, args, true);

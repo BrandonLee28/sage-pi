@@ -11,6 +11,7 @@ export type Settings = {
   model?: { id: string; baseUrl: string; revision: string };
   mcpServers?: Record<string, McpServer>;
   gateway?: { url: string; token: string };
+  voice?: { ttsModel: string };
 };
 
 export function gatewayUrl(value: string): string {
@@ -35,6 +36,8 @@ export function readSettings(dataDir: string): Settings {
     throw new Error("Cannot read settings.json; fix the file before continuing.", { cause: error });
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid settings.json.");
+  if (value.voice !== undefined && (!value.voice || typeof value.voice.ttsModel !== "string" || !value.voice.ttsModel.trim()))
+    throw new Error("Invalid saved voice model.");
   if (value.gateway !== undefined) {
     if (!value.gateway || typeof value.gateway.url !== "string" || typeof value.gateway.token !== "string" ||
       value.gateway.token.length < 32 || /\s/.test(value.gateway.token)) throw new Error("Invalid saved gateway connection.");

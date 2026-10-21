@@ -29,5 +29,5 @@ if (compiled.error) throw new Error("Install Apple's Command Line Tools first: x
 if (compiled.status !== 0) process.exit(compiled.status ?? 1);
 console.log("Voice bindings and native macOS echo cancellation installed.");
 console.log("Accept the Phonon 40M model terms, then sign in: uvx --from huggingface-hub hf auth login");
-console.log("Or download config.json, tokenizer.json, model.q8.gguf and default-voice.safetensors into one folder, then set VOICE_TTS_MODEL to that folder.");
+console.log("Or download config.json, tokenizer.json, model.q8.gguf and default-voice.safetensors into one folder, then run: sage voice model /path/to/folder");
 console.log("Parakeet Unified English 0.6B recognition is ready. Start Sage and enter /speak; stay quiet for the two-second room calibration.");
