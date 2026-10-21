@@ -39,6 +39,7 @@ import { webExtension } from "./web.ts";
 import { calendarExtension } from "../extensions/calendar.ts";
 import { routinesExtension } from "../extensions/routines.ts";
 import { connectMcp } from "../extensions/mcp.ts";
+import { VoiceMode } from "../extensions/voice.ts";
 import type { Config } from "./config.ts";
 
 export const context = BACKGROUND_CONTEXT;
@@ -453,15 +454,18 @@ export async function openAssistant(
     if (!conversation) throw new Error(`Missing conversation ${id}`);
     const saved = await harness.snapshot(AgentDoc, id, context);
     const choice = await harness.snapshot(ModelChoice, id, context);
+    const voiceMode = await harness.snapshot(VoiceMode, id, context);
     const changed = (choice?.revision ?? null) !== (config.modelRevision ?? null);
     await conversation.commit(async (tx) => {
       await configure(tx, id, {
         model: !changed && saved?.model && models.getModel(saved.model.provider, saved.model.modelId)
           ? saved.model : defaultModel,
-        thinkingLevel: saved?.thinkingLevel ?? "low",
+        thinkingLevel: saved?.thinkingLevel === "off" && voiceMode?.previousThinking
+          ? voiceMode.previousThinking : saved?.thinkingLevel ?? "low",
         cwd: workspace,
       });
       (await tx.doc(ModelChoice, id)).revision = config.modelRevision ?? null;
+      (await tx.doc(VoiceMode, id)).previousThinking = null;
     }, context);
   }
   const mcp: Awaited<ReturnType<typeof connectMcp>>[] = [];

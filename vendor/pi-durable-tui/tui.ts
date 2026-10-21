@@ -120,6 +120,7 @@ export class DurableTui {
 			embedWorkingStatus: true,
 		});
 		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
+			{ name: "speak", description: "Hands-free local voice; /speak off stops the microphone" },
 			{ name: "skills", description: "Inspect available skills (read only)" },
 			{ name: "memory", description: "Inspect saved memory and profile (read only)" },
 			{ name: "schedules", description: "Inspect recurring routines and reminders (read only)" },

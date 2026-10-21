@@ -12,6 +12,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "scripts/**/*.ts",
     "extensions/**/*.ts",
     "test/**/*.ts",
     "vendor/**/*.ts"

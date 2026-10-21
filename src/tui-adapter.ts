@@ -4,7 +4,9 @@ import type {
   ConversationId,
   ModelRef,
   TaskGraph,
+  Conversation,
 } from "@earendil-works/pi-durable";
+import { AgentDoc, configure } from "@earendil-works/pi-durable";
 import { context, TelegramTopics, TuiSessions, USER_PROFILE_MAX_CHARS, type Assistant } from "./assistant.ts";
 import { PINNED_MEMORY_LIMIT } from "./personal.ts";
 import { Routines } from "../extensions/routines.ts";
@@ -12,6 +14,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
+import { localVoice, type VoiceEvent } from "./voice.ts";
+import { voiceReply } from "./voice-reply.ts";
+import { voiceExtension, VoiceMode } from "../extensions/voice.ts";
 
 // This is the view/controller contract of Pi's original durable TUI example.
 export type DurableView = {
@@ -50,7 +55,7 @@ export type DurableController = {
 export const agentOf = (view: ConversationView): AgentState =>
   (view.docs["pi.agent"] ?? {}) as AgentState;
 
-export async function tuiAdapter(assistant: Assistant, config: Config) {
+export async function tuiAdapter(assistant: Assistant, config: Config, audio = localVoice) {
   const sessions = await assistant.harness.documentState(TuiSessions, context);
   if (!sessions) throw new Error("Missing TUI session index.");
   let selected = sessions.value?.active
@@ -73,6 +78,80 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
   };
   const report = (error: unknown) =>
     notice(error instanceof Error ? error.message : String(error), "error");
+  let voice: { audio: ReturnType<typeof localVoice>; conversation: Conversation;
+    turn: AbortController;
+    utterance: number; interrupting: Promise<void>; firstPCM: boolean; endedAt: number;
+    asrDoneAt: number; firstTextAt: number } | undefined;
+  assistant.registry.install(voiceExtension(assistant.workspace, (id) => voice?.conversation.id === id));
+  const stopVoice = async () => {
+    const previous = voice;
+    voice = undefined;
+    if (!previous) return;
+    previous.turn.abort();
+    previous.audio.stop();
+    await previous.interrupting;
+    await previous.conversation.abort(context);
+    await previous.conversation.commit(async (tx) => {
+      const lease = await tx.doc(VoiceMode, previous.conversation.id);
+      const agent = await tx.doc(AgentDoc, previous.conversation.id);
+      if (agent.thinkingLevel === "off" && lease.previousThinking)
+        await configure(tx, previous.conversation.id, { thinkingLevel: lease.previousThinking });
+      lease.previousThinking = null;
+    }, context);
+    notice("Voice off. Microphone and playback stopped.");
+  };
+  const startVoice = async () => {
+    if (voice) { notice("Voice is on. Speak naturally; /speak off closes the microphone."); return; }
+    if (conversation.value.docs["pi.live"]?.run) throw new Error("Stop current work before starting voice mode.");
+    const target = selected;
+    const previousThinking = agentOf(conversation.value).thinkingLevel;
+    const onVoice = (event: VoiceEvent) => {
+      const current = voice;
+      if (!current || current.conversation.id !== target.id) return;
+      if (event.type === "ready") notice("Listening · hands-free · use headphones · /speak off to stop");
+      if (event.type === "speech_start") {
+        current.utterance = event.id!;
+        current.turn.abort();
+        current.audio.interrupt();
+        current.interrupting = current.interrupting.then(() => target.abort(context));
+        void current.interrupting.catch(report);
+        notice("Listening…");
+      }
+      if (event.type === "speech_end") notice("Transcribing…");
+      if (event.type === "transcript" && event.id === current.utterance) {
+        if (!event.text?.trim()) { notice("No words recognized. Listening…"); return; }
+        current.turn = new AbortController();
+        const turn = current.turn;
+        current.endedAt = event.endedAt!; current.asrDoneAt = event.asrDoneAt!;
+        current.firstPCM = false; current.firstTextAt = 0;
+        notice("Thinking…");
+        void current.interrupting.then(async () => {
+          if (turn.signal.aborted || voice !== current) return;
+          await voiceReply(assistant, target, event.text!, turn.signal,
+            (phrase) => { if (!turn.signal.aborted) current.audio.speak(phrase); },
+            () => { current.firstTextAt = Date.now(); });
+          if (!turn.signal.aborted && voice === current) current.audio.finish();
+        }).catch((error) => { if (!turn.signal.aborted) { current.audio.interrupt(); report(error); } });
+      }
+      if (event.type === "audio" && !current.firstPCM) {
+        current.firstPCM = true;
+        notice(`Speaking · first PCM ${Math.round(Date.now() - current.endedAt)} ms (+ playback) · pause/ASR ${Math.round(current.asrDoneAt - current.endedAt)} ms · model ${Math.round(current.firstTextAt - current.asrDoneAt)} ms`);
+      }
+      if (event.type === "audio_end") notice("Listening · ready for another turn");
+      if (event.type === "error") { report(event.message ?? "Voice failed."); void stopVoice().catch(report); }
+    };
+    const engine = audio(config, onVoice);
+    voice = { audio: engine, conversation: target, turn: new AbortController(),
+      utterance: 0, interrupting: Promise.resolve(), firstPCM: false, endedAt: 0, asrDoneAt: 0, firstTextAt: 0 };
+    notice("Loading local speech models… First use downloads model files. Microphone opens after loading.");
+    try {
+      await target.commit(async (tx) => {
+        (await tx.doc(VoiceMode, target.id)).previousThinking = previousThinking ?? "low";
+        await configure(tx, target.id, { thinkingLevel: "off" });
+      }, context);
+      await engine.start();
+    } catch (error) { await stopVoice(); throw error; }
+  };
   const source: DurableViewSource = {
     current: () => ({
       session: {
@@ -115,13 +194,19 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
   const controller: DurableController = {
     submit: (text, mode) =>
       guard(async () => {
+        if (/^\/speak(?:\s|$)/.test(text.trim())) {
+          if (text.trim() === "/speak off") return stopVoice();
+          if (["/speak", "/speak on"].includes(text.trim())) return startVoice();
+          throw new Error("Use /speak, /speak on, or /speak off.");
+        }
         if (text.trim() === "/new") return controller.newSession();
         if (text.trim() === "/help") {
           notice(
-            "/new new session · /sessions saved chats · /skills, /memory, /schedules (/crons) read-only inspectors · /model · /tasks task graph · /compact [instructions] · Esc stop · Ctrl+O expand tools · Ctrl+C exit.",
+            "/speak hands-free local voice · /speak off stop microphone · /new new session · /sessions saved chats · /skills, /memory, /schedules (/crons) read-only inspectors · /model · /tasks task graph · /compact [instructions] · Esc stop · Ctrl+O expand tools · Ctrl+C exit.",
           );
           return;
         }
+        await stopVoice();
         const submission = await assistant.submit(
           text,
           undefined,
@@ -145,7 +230,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
         }
         await selected.compact(instructions, context);
       }),
-    abort: () => guard(() => selected.abort(context)),
+    abort: () => guard(async () => { await stopVoice(); await selected.abort(context); }),
     cycleThinking: () => guard(async () => {
       const agent = agentOf(conversation.value);
       const model = agent.model && assistant.models.getModel(agent.model.provider, agent.model.modelId);
@@ -161,6 +246,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
     }),
     setModel: (model) =>
       guard(async () => {
+        await stopVoice();
         const available = assistant.models.getModel(model.provider, model.modelId);
         if (!available)
           throw new Error("Model is not configured.");
@@ -174,6 +260,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       changed();
     },
     newSession: () => guard(async () => {
+      await stopVoice();
       const created = await assistant.createSession(selected.id);
       await controller.switchConversation(created.id);
     }),
@@ -238,6 +325,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       } catch (error) { report(error); return undefined; }
     },
     switchConversation: (id) => guard(async () => {
+      await stopVoice();
       if (!source.current().conversations.some((item) => item.id === id))
         throw new Error("Conversation is not configured.");
       const next = await assistant.harness.conversation(id, context);
@@ -262,7 +350,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
     source,
     controller,
     notice,
-    dispose() {
+    async dispose() {
       stopConversation();
       stopTasks();
       stopTopics();
@@ -272,6 +360,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
       topics.dispose();
       sessions.dispose();
       listeners.clear();
+      await stopVoice();
     },
   };
 }
