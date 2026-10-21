@@ -394,6 +394,12 @@ use full snapshots; very long transcripts can use substantial bandwidth.
 Files and shell commands refer to the gateway filesystem; this does not add Mac
 file uploads or arbitrary execution on the Mac.
 
+Sage's tool instructions prefer direct APIs and configured integrations, including
+calendar tools, before computer use. Cua is for tasks requiring visual interaction,
+tasks direct tools cannot complete, or explicit requests to use the desktop. This
+guidance also applies to existing workspaces without replacing their instructions.
+Updating the gateway image is required to apply it to a deployed gateway.
+
 The pinned upstream Cua desktop exposes `/mcp` only on the stack network; the
 gateway registers it as `mcp__desktop__...`. It has its own data volume, needs about
 4 GB of available RAM, and gets no host directories or Docker socket. Sage controls
