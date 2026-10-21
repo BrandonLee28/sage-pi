@@ -1,9 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { SageHeader, SagePicker, registerSageTheme } from "../src/cli-ui.ts";
+import { SageHeader, SagePicker, SageVoice, registerSageTheme } from "../src/cli-ui.ts";
 
 registerSageTheme();
+
+test("the voice orb reacts, animates, fits narrow screens, and stops when hidden", async () => {
+  let repaints = 0;
+  const orb = new SageVoice(() => { repaints++; });
+  try {
+    assert.deepEqual(orb.render(80), []);
+    orb.update({ phase: "calibrating", level: 0, progress: .5 });
+    assert.match(stripTerminalSequences(orb.render(80).join('\n')), /Calibrating.*stay quiet[\s\S]*1s/);
+    orb.update({ phase: "hearing", level: .9 });
+    const first = orb.render(80).join('\n');
+    assert.match(stripTerminalSequences(first), /Hearing you[\s\S]*\|{10}/);
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    assert.ok(repaints >= 1);
+    assert.notEqual(orb.render(80).join('\n'), first);
+    for (const width of [1, 20, 40, 80]) {
+      for (const row of orb.render(width)) assert.ok(visibleWidth(row) <= width);
+    }
+    orb.update(undefined);
+    assert.deepEqual(orb.render(80), []);
+    const ended = repaints;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(repaints, ended);
+  } finally { orb.dispose(); }
+});
 
 test("Sage's header and pickers fit narrow terminals and scrub supplied labels", () => {
   const header = new SageHeader({ model: "a-very-long-model-name-".repeat(5), cwd: "/workspace/".repeat(20), section: "Setup" });

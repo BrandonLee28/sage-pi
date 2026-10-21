@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as pause } from "node:timers/promises";
@@ -11,7 +11,7 @@ import { AgentDoc } from "@earendil-works/pi-durable";
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai/utils/transcript";
 import { context, openAssistant } from "../src/assistant.ts";
 import { readConfig } from "../src/config.ts";
-import { SpokenPhrases, type VoiceEvent } from "../src/voice.ts";
+import { localVoice, SpokenPhrases, type VoiceEvent } from "../src/voice.ts";
 import { voiceReply } from "../src/voice-reply.ts";
 import { tuiAdapter } from "../src/tui-adapter.ts";
 import { singleStream } from "../src/model.ts";
@@ -40,6 +40,59 @@ test("spoken phrases stream bounded sentences and omit fenced code and Markdown"
   const long = new SpokenPhrases().push("hello ".repeat(150), true);
   assert.ok(long.length > 1);
   assert.ok(long.every((part) => part.length <= 181));
+});
+
+test("native audio bridge waits for playback completion and ignores canceled audio", async (t) => {
+  if (process.platform !== "darwin") return t.skip("Local voice is macOS-only");
+  const directory = await mkdtemp(join(tmpdir(), "sage-voice-pipes-"));
+  const keys = ["VOICE_PYTHON", "VOICE_AUDIO", "VOICE_DATA_DIR"];
+  const previous = keys.map((key) => process.env[key]);
+  const events: VoiceEvent[] = [];
+  let engine: ReturnType<typeof localVoice> | undefined;
+  try {
+    const worker = join(directory, "worker");
+    const device = join(directory, "audio");
+    await writeFile(worker, `#!/usr/bin/env node
+const {createInterface}=require('node:readline');
+const send=(value)=>process.stdout.write(JSON.stringify(value)+'\\n');
+send({type:'ready'});
+createInterface({input:process.stdin}).on('line',line=>{
+ const job=JSON.parse(line);
+ if(job.type==='mic') send({type:'calibrated',value:-40});
+ if(job.type==='speak') {
+  send({type:'audio',epoch:job.epoch,sampleRate:24000,pcm:'AAAAAA=='});
+  send({type:'audio_end',epoch:job.epoch});
+ }
+});
+`, { mode: 0o700 });
+    await writeFile(device, `#!/usr/bin/env node
+const {createInterface}=require('node:readline');
+const send=(value)=>process.stdout.write(JSON.stringify(value)+'\\n');
+send({type:'ready'}); send({type:'mic',pcm:'AAAAAA=='});
+createInterface({input:process.stdin}).on('line',line=>{
+ const job=JSON.parse(line);
+ // Emit even canceled epochs to exercise the application's late-event guard.
+ if(job.type==='audio_end') setTimeout(()=>send(job),200);
+});
+`, { mode: 0o700 });
+    process.env.VOICE_PYTHON = worker; process.env.VOICE_AUDIO = device; process.env.VOICE_DATA_DIR = directory;
+    engine = localVoice({ ...readConfig(), dataDir: directory }, (event) => events.push(event));
+    await engine.start();
+    await until(() => events.some((event) => event.type === "calibrated"));
+    engine.speak("Hello.");
+    await until(() => events.some((event) => event.type === "audio"));
+    assert.ok(!events.some((event) => event.type === "audio_end"), "synthesis completion must not masquerade as playback completion");
+    engine.interrupt();
+    await pause(250);
+    assert.ok(!events.some((event) => event.type === "audio_end"), "late canceled playback must not reset a newer turn");
+    engine.speak("A new reply.");
+    await until(() => events.some((event) => event.type === "audio_end" && event.epoch === 1));
+    assert.ok(!events.some((event) => event.type === "error"), JSON.stringify(events));
+  } finally {
+    engine?.stop();
+    keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("voice observes native Pi streaming before completion and never speaks thinking", async () => {
@@ -92,9 +145,17 @@ test("hands-free TUI voice interrupts native work, ignores stale transcripts, an
   try {
     f.faux.setResponses([fauxAssistantMessage("Hello Brandon.")]);
     await adapter.controller.submit("/speak", "steer");
+    assert.equal(adapter.source.current().voice?.phase, "calibrating");
+    emit({ type: "calibrating", value: .5 });
+    assert.equal(adapter.source.current().voice?.progress, .5);
+    emit({ type: "calibrated", value: -40 });
+    emit({ type: "level", value: .7 });
+    assert.equal(adapter.source.current().voice?.phase, "listening");
+    assert.equal(adapter.source.current().voice?.level, .7);
     assert.equal(f.faux.state.callCount, 0, "the command must not become a user prompt");
     assert.equal((await f.assistant.harness.snapshot(AgentDoc, f.assistant.root.id, context))!.thinkingLevel, "off");
     emit({ type: "speech_start", id: 1 });
+    assert.equal(adapter.source.current().voice?.phase, "hearing");
     emit({ type: "speech_end", id: 1 });
     emit({ type: "transcript", id: 0, text: "Stale input.", endedAt: Date.now() - 500, asrDoneAt: Date.now() });
     emit({ type: "transcript", id: 1, text: "Hello Sage.", endedAt: Date.now() - 500, asrDoneAt: Date.now() });
@@ -115,6 +176,7 @@ test("hands-free TUI voice interrupts native work, ignores stale transcripts, an
     assert.ok(interrupts >= 3);
     assert.deepEqual(heard, ["Hello Brandon."]);
     await adapter.controller.submit("/speak off", "steer");
+    assert.equal(adapter.source.current().voice, undefined);
     assert.equal(stops, 1);
     assert.equal((await f.assistant.harness.snapshot(AgentDoc, f.assistant.root.id, context))!.thinkingLevel, "low");
     await adapter.controller.submit("/speak", "steer");
@@ -125,30 +187,46 @@ test("hands-free TUI voice interrupts native work, ignores stale transcripts, an
   } finally { await adapter.dispose(); await f.close(); }
 });
 
-test("voice activity detection waits for speech, preserves pre-roll, and bounds utterances", (t) => {
+test("voice calibrates room noise, ignores brief/quiet sounds, and bounds speech", (t) => {
   const result = spawnSync("python3", ["-c", `
 import importlib.util
+import struct
 spec = importlib.util.spec_from_file_location("voice_worker", "scripts/voice-worker.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 class Vad:
     def is_speech(self, frame, rate):
         assert len(frame) == 640 and rate == 16000
-        return frame[0] == 1
+        return any(frame)
 events = []
 detector = module.SpeechDetector(Vad(), lambda *event: events.append(event), 400)
-detector.feed(bytes(640 * 30))
-assert events == []
-detector.feed(bytes([1]) * (640 * 5))
-assert events[0][0] == "speech_start"
-detector.feed(bytes(640 * 19))
-assert len(events) == 1
-detector.feed(bytes(640))
-assert events[-1][0] == "speech_end"
-assert len(events[-1][2][0]) >= 640 * 25
+noise = struct.pack('<320h', *([100] * 320))
+voice = struct.pack('<320h', *([3000] * 320))
+speech = lambda: [event for event in events if event[0].startswith('speech_')]
+detector.feed(noise * 99)
+assert detector.threshold_db is None and speech() == []
+detector.feed(noise)
+assert detector.threshold_db is not None
+assert events[-1][0] == 'calibrated'
+# A VAD false positive at the calibrated room level must not start speech.
+detector.feed(noise * 100)
+assert speech() == []
+# A keyboard-like burst shorter than 160 ms must not interrupt anything.
+detector.feed(voice * 5 + noise * 30)
+assert speech() == []
+detector.feed(voice * 8 + noise * 20)
+assert [event[0] for event in speech()] == ['speech_start', 'speech_discarded']
+events.clear()
+detector.feed(voice * 20 + noise * 19)
+assert [event[0] for event in speech()] == ['speech_start']
+detector.feed(noise)
+assert speech()[-1][0] == "speech_end"
+assert len(speech()[-1][2][0]) >= 640 * 40
 assert len(detector.frames) == 0
-detector.feed(bytes([1]) * (640 * 1600))
-assert len([event for event in events if event[0] == "speech_end"]) == 2
+detector.feed(voice * 1600)
+assert len([event for event in speech() if event[0] == "speech_end"]) == 2
+# Each new microphone session starts uncalibrated again.
+assert module.SpeechDetector(Vad(), lambda *event: None).threshold_db is None
 `], { cwd: new URL("..", import.meta.url), encoding: "utf8", env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
   if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") return t.skip("Optional Python voice runtime is not installed");
   assert.equal(result.status, 0, result.stderr);

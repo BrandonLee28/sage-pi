@@ -38,6 +38,9 @@ Local adaptations:
   inspection does not enter the model transcript or invoke tools.
 - Advertise `/speak` through the existing native slash completion; its lifecycle,
   speech bindings, and Pi event consumption live in the application adapter.
+- Mount `SageVoice` from `src/cli-ui.ts` in the input dock and update it from transient
+  adapter state. The ASCII orb owns its redraw timer and disposes it on voice/UI exit;
+  no inference or durable transcript writes are used for animation.
 
 See [Prime design provenance](../prime-design/README.md) for the reference and license.
 

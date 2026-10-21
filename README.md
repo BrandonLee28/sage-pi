@@ -194,21 +194,30 @@ This read-only snapshot refreshes on opening and does not run or change schedule
 ## Local hands-free voice prototype (macOS)
 
 `/speak` in the existing Pi TUI opens the Mac's microphone after local speech models
-load. Speak naturally; a 400 ms pause ends a turn. Speech detection interrupts local
+load. Stay quiet for a **two-second room-noise calibration** each time voice starts.
+An animated ASCII orb in Sage's palette shows the live microphone level and the
+current state: loading, calibrating, listening, hearing you, transcribing, thinking,
+or speaking. It stays above the input and stops animating when voice closes.
+Speak naturally; a 400 ms pause ends a turn. Sustained speech detection interrupts local
 playback and aborts the current Pi run, then the recognized text enters the same
 saved conversation. Sage speaks phrases from Pi's committed response stream while
 the rest of the response is still generating. Thinking and tool arguments/results
 are never spoken. Native Pi continues to own inference, tools, cancellation, and
 storage. There is no web UI, HTTP server, or second agent loop.
 
-Use **headphones**: this prototype has no acoustic echo cancellation. With speakers,
-Sage can hear its own voice as a new input. This is a turn-based ASR → existing LLM
-→ TTS pipeline with interruption; it is not a full-duplex speech model.
+Capture and playback share macOS's native `AVAudioEngine` with
+[voice processing](https://developer.apple.com/videos/play/wwdc2019/510/) enabled,
+so echo cancellation has a reference for Sage's speaker output. The mic stays open
+during playback for interruption. Use the Mac's default input/output devices, selected
+in System Settings. Headphones can still help in noisy rooms or at high speaker volume.
+This is a turn-based ASR → existing LLM → TTS pipeline with interruption.
 
-Install optional speech bindings once (requires `uv`, FFmpeg/FFplay, and macOS):
+Install optional speech bindings once (requires `uv`, Apple's Command Line Tools,
+and macOS 10.15+). Rerun setup after updates to the native audio helper:
 
 ```sh
-brew install uv ffmpeg
+brew install uv
+# If Apple's compiler is missing: xcode-select --install
 npm run voice:setup
 ```
 
@@ -216,7 +225,9 @@ The primary application remains TypeScript. A small stdio subprocess uses pinned
 native bindings for [whisper.cpp](https://github.com/absadiki/pywhispercpp),
 [WebRTC VAD](https://github.com/daanzu/py-webrtcvad-wheels), and
 [Phonon](https://github.com/gradium-ai/xn-ptts/tree/v0.4.0). Both speech models stay
-loaded across turns. Optional Python packages live in `DATA_DIR/voice/runtime`,
+loaded across turns. A small Swift helper handles only native audio I/O and echo
+cancellation; setup compiles it to `DATA_DIR/voice/audio`. There is no Swift app UI
+or agent logic, and no FFmpeg/FFplay requirement. Optional Python packages live in `DATA_DIR/voice/runtime`,
 separate from npm dependencies. Setup preserves an existing runtime and does not
 start the microphone. Whisper `base.en` downloads on first use and caches in the
 voice directory; `VOICE_ASR_MODEL` can select another model or local model file.
@@ -251,15 +262,18 @@ temporarily sets the selected conversation's native thinking level to Off; its p
 level is restored on exit or restart, unless you chose another level yourself.
 Model calls and context still use the same backend and single inference stream.
 
-The TUI reports pause + ASR time, model time to first answer text, and time to the
-first PCM chunk since detected end of speech. **First PCM is not measured speaker
-latency**: sentence buffering, audio-device startup and playback buffering add delay.
+The orb reports time to the first PCM chunk since detected end of speech,
+pause + ASR time, and model time to first text.
+**First PCM is not measured speaker latency**: sentence buffering and playback
+buffering add delay. The speaking state remains active until native playback finishes.
 The recognizer waits for a pause before decoding; this version does not provide live
 partial transcription or semantic end-of-turn detection. Change `VOICE_SILENCE_MS`
 (200–2000, in 20 ms steps) to compare responsiveness with tolerance for pauses.
-`VOICE_MIC` selects an AVFoundation microphone name/index; list devices with
-`ffmpeg -f avfoundation -list_devices true -i ""`. macOS may request microphone
-permission for your terminal. SSH does not forward your Mac's microphone.
+The calibrated energy gate and WebRTC VAD require sustained speech above room noise;
+brief bursts are discarded before transcription, and low-confidence recognition is
+ignored. macOS may request microphone permission for your terminal.
+SSH does not forward your Mac's microphone. Echo cancellation depends on the audio
+route and environment; it is not a guarantee against every speaker-induced trigger.
 New speech supersedes an unfinished voice turn; an older transcription that has
 not yet been admitted to Pi is discarded to avoid a late, out-of-order request.
 
@@ -557,7 +571,7 @@ headless server; follow the upstream headless instructions and keep credentials 
 - `src/tui-adapter.ts`: Connect our existing harness to the upstream TUI's view/controller.
 - `vendor/pi-durable-tui/tui.ts`: Actual upstream demo renderer, with provenance and MIT license.
 - `src/assistant.ts`: Assemble native Pi; load extensions, instructions, and skills.
-- `src/voice.ts`, `src/voice-reply.ts`, `scripts/voice-worker.py`: Local speech I/O and native Pi stream observation.
+- `src/voice.ts`, `src/voice-reply.ts`, `scripts/voice-worker.py`, `scripts/voice-audio.swift`: Local speech, macOS echo cancellation, and native Pi stream observation.
 - `src/personal.ts`: Individual memory records, responsibilities, native wake task.
 - `src/model.ts`: Local OpenAI-compatible provider.
 - `src/telegram.ts`, `src/web.ts`: Optional service adapters.

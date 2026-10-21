@@ -34,9 +34,13 @@ export class SpokenPhrases {
   }
 }
 
-export type VoiceEvent = { type: "ready" | "speech_start" | "speech_end" | "transcript" | "audio" | "audio_end" | "error";
+export type VoiceStatus = {
+  phase: "loading" | "calibrating" | "listening" | "hearing" | "transcribing" | "thinking" | "speaking";
+  level: number; progress?: number; detail?: string;
+};
+export type VoiceEvent = { type: "ready" | "calibrating" | "calibrated" | "level" | "speech_start" | "speech_end" | "speech_discarded" | "transcript" | "audio" | "audio_end" | "error";
   id?: number; epoch?: number; text?: string; pcm?: string; sampleRate?: number;
-  endedAt?: number; asrDoneAt?: number; message?: string };
+  endedAt?: number; asrDoneAt?: number; message?: string; value?: number };
 
 export function localVoice(config: Config, events: (event: VoiceEvent) => void) {
   const directory = process.env.VOICE_DATA_DIR ?? join(config.dataDir, "voice");
@@ -45,8 +49,7 @@ export function localVoice(config: Config, events: (event: VoiceEvent) => void) 
   if (!Number.isInteger(silence) || silence < 200 || silence > 2000 || silence % 20)
     throw new Error("VOICE_SILENCE_MS must be a multiple of 20 between 200 and 2000.");
   let worker: ChildProcessWithoutNullStreams | undefined;
-  let microphone: ChildProcessWithoutNullStreams | undefined;
-  let player: ChildProcessWithoutNullStreams | undefined;
+  let device: ChildProcessWithoutNullStreams | undefined;
   let closed = false, epoch = 0;
   const children = new Set<ChildProcessWithoutNullStreams>();
   const launch = (command: string, args: string[], critical = false) => {
@@ -68,6 +71,8 @@ export function localVoice(config: Config, events: (event: VoiceEvent) => void) 
     async start() {
       if (process.platform !== "darwin") throw new Error("The local voice prototype currently supports macOS. Run it on the Mac with your microphone, not over SSH.");
       await access(python).catch(() => { throw new Error("Voice runtime is missing. Run npm run voice:setup first."); });
+      const audio = process.env.VOICE_AUDIO ?? join(directory, "audio");
+      await access(audio).catch(() => { throw new Error("Native voice audio is missing. Run npm run voice:setup first."); });
       await mkdir(directory, { recursive: true });
       if (closed) return;
       const args = ["-u", fileURLToPath(new URL("../scripts/voice-worker.py", import.meta.url)),
@@ -81,27 +86,31 @@ export function localVoice(config: Config, events: (event: VoiceEvent) => void) 
         try {
           const message = JSON.parse(line) as VoiceEvent;
           if (message.type === "ready") {
-            microphone = launch(process.env.VOICE_FFMPEG ?? "ffmpeg", ["-nostdin", "-hide_banner", "-loglevel", "error",
-              "-f", "avfoundation", "-i", `:${process.env.VOICE_MIC ?? "default"}`,
-              "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1"], true);
-            microphone.stdout.on("data", (pcm: Buffer) => {
-              if (!send({ type: "mic", pcm: pcm.toString("base64") })) {
-                microphone?.stdout.pause();
-                worker?.stdin.once("drain", () => microphone?.stdout.resume());
-              }
+            device = launch(audio, [], true);
+            createInterface({ input: device.stdout }).on("line", (line) => {
+              if (closed) return;
+              try {
+                const input = JSON.parse(line) as VoiceEvent | { type: "mic"; pcm: string };
+                if (input.type === "mic") {
+                  if (!send(input)) {
+                    device!.stdout.pause();
+                    worker?.stdin.once("drain", () => device?.stdout.resume());
+                  }
+                } else if (input.type !== "audio_end" || input.epoch === epoch) events(input);
+              } catch { events({ type: "error", message: "Invalid native audio output." }); }
             });
+            return;
           }
           if ((message.type === "audio" || message.type === "audio_end") && message.epoch !== epoch) return;
-          if (message.type === "audio") {
-            if (message.sampleRate !== 24000 || !message.pcm) throw new Error("Unexpected speech audio format.");
-            if (!player) player = launch(process.env.VOICE_FFPLAY ?? "ffplay", ["-nodisp", "-autoexit", "-loglevel", "error",
-              "-f", "f32le", "-sample_rate", "24000", "-ch_layout", "mono", "-probesize", "32", "-analyzeduration", "0", "-i", "pipe:0"]);
-            if (!player.stdin.write(Buffer.from(message.pcm, "base64"))) {
+          if (message.type === "audio" || message.type === "audio_end") {
+            if (message.type === "audio" && (message.sampleRate !== 24000 || !message.pcm))
+              throw new Error("Unexpected speech audio format.");
+            if (!device?.stdin.write(JSON.stringify(message) + "\n")) {
               worker!.stdout.pause();
-              player.stdin.once("drain", () => worker?.stdout.resume());
+              device?.stdin.once("drain", () => worker?.stdout.resume());
             }
+            if (message.type === "audio_end") return; // Native playback, not synthesis, owns completion.
           }
-          if (message.type === "audio_end") { player?.stdin.end(); player = undefined; }
           events(message);
         } catch (error) { events({ type: "error", message: `Voice worker: ${error instanceof Error ? error.message : "invalid output"}` }); }
       });
@@ -111,15 +120,13 @@ export function localVoice(config: Config, events: (event: VoiceEvent) => void) 
     interrupt() {
       epoch++;
       send({ type: "cancel", epoch });
-      // Include players whose stdin ended but whose buffered audio is still playing.
-      for (const child of children) if (child !== worker && child !== microphone) child.kill();
-      player = undefined;
+      device?.stdin.write(JSON.stringify({ type: "cancel", epoch }) + "\n");
       worker?.stdout.resume();
     },
     stop() {
       closed = true;
       for (const child of children) child.kill();
-      worker = microphone = player = undefined;
+      worker = device = undefined;
     },
   };
 }

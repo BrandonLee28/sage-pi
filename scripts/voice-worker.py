@@ -3,15 +3,17 @@ import argparse
 import base64
 import collections
 import json
+import math
 import os
 import queue
+import struct
 import sys
 import threading
 import time
 
 
 class SpeechDetector:
-    """20 ms WebRTC frames, 200 ms pre-roll, bounded utterances, and a configurable pause."""
+    """Calibrate room noise, then require sustained VAD + energy above that floor."""
     def __init__(self, vad, emit, silence_ms=400):
         self.vad, self.emit = vad, emit
         self.silence_frames = silence_ms // 20
@@ -19,28 +21,52 @@ class SpeechDetector:
         self.history = collections.deque(maxlen=10)
         self.frames = []
         self.positive = self.silent = self.id = 0
+        self.voiced = self.tick = 0
+        self.calibration = []
+        self.threshold_db = None
 
     def feed(self, pcm):
         self.pending += pcm
         while len(self.pending) >= 640:
             frame, self.pending = self.pending[:640], self.pending[640:]
-            voiced = self.vad.is_speech(frame, 16000)
+            samples = struct.unpack("<320h", frame)
+            rms = math.sqrt(sum(value * value for value in samples) / 320) / 32768
+            db = 20 * math.log10(max(rms, 1e-6))
+            self.tick += 1
+            if self.threshold_db is None:
+                self.calibration.append(db)
+                if self.tick % 5 == 0:
+                    self.emit("calibrating", 0, len(self.calibration) / 100)
+                if len(self.calibration) == 100:
+                    self.noise_db = sorted(self.calibration)[79]
+                    self.threshold_db = max(-48, self.noise_db + 10)
+                    self.emit("calibrated", 0, self.threshold_db)
+                continue
+            if self.tick % 5 == 0:
+                level = max(0, min(1, (db - self.threshold_db + 12) / 30))
+                self.emit("level", 0, level)
+            voiced = db >= self.threshold_db and self.vad.is_speech(frame, 16000)
             if not self.frames:
                 self.history.append(frame)
                 self.positive = self.positive + 1 if voiced else 0
-                if self.positive < 3:
+                if self.positive < 8:
                     continue
                 self.id += 1
                 self.frames = list(self.history)
+                self.voiced = self.positive
                 self.history.clear()
                 self.emit("speech_start", self.id, None)
             else:
                 self.frames.append(frame)
+                self.voiced += int(voiced)
             self.silent = 0 if voiced else self.silent + 1
             if self.silent >= self.silence_frames or len(self.frames) >= 1500:
-                self.emit("speech_end", self.id, (b"".join(self.frames), time.time() * 1000 - self.silent * 20))
+                if self.voiced >= 12:
+                    self.emit("speech_end", self.id, (b"".join(self.frames), time.time() * 1000 - self.silent * 20))
+                else:
+                    self.emit("speech_discarded", self.id, None)
                 self.frames = []
-                self.positive = self.silent = 0
+                self.positive = self.silent = self.voiced = 0
 
 
 def main():
@@ -95,16 +121,19 @@ def main():
             identifier, pcm, ended_at = recognition_jobs.get()
             try:
                 samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
-                segments = asr.transcribe(samples)
-                send("transcript", id=identifier, text=" ".join(s.text.strip() for s in segments).strip(),
+                segments = asr.transcribe(samples, extract_probability=True)
+                text = " ".join(s.text.strip() for s in segments if s.probability >= 0.45).strip()
+                send("transcript", id=identifier, text=text,
                      endedAt=ended_at, asrDoneAt=time.time() * 1000)
             except Exception as error:
                 send("error", message=f"Transcription failed: {error}")
 
     def detected(kind, identifier, data):
-        if kind == "speech_start":
+        if kind in ("speech_start", "speech_discarded"):
             send(kind, id=identifier)
-        else:
+        elif kind in ("calibrating", "calibrated", "level"):
+            send(kind, value=data)
+        elif kind == "speech_end":
             pcm, ended_at = data
             send(kind, id=identifier)
             if recognition_jobs.full():

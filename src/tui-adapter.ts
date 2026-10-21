@@ -14,7 +14,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
-import { localVoice, type VoiceEvent } from "./voice.ts";
+import { localVoice, type VoiceEvent, type VoiceStatus } from "./voice.ts";
 import { voiceReply } from "./voice-reply.ts";
 import { voiceExtension, VoiceMode } from "../extensions/voice.ts";
 
@@ -30,6 +30,7 @@ export type DurableView = {
     message: string;
   }[];
   tasks?: TaskGraph;
+  voice?: VoiceStatus;
 };
 export type DurableViewSource = {
   current(): DurableView;
@@ -79,6 +80,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config, audio = l
   const report = (error: unknown) =>
     notice(error instanceof Error ? error.message : String(error), "error");
   let voice: { audio: ReturnType<typeof localVoice>; conversation: Conversation;
+    status: VoiceStatus;
     turn: AbortController;
     utterance: number; interrupting: Promise<void>; firstPCM: boolean; endedAt: number;
     asrDoneAt: number; firstTextAt: number } | undefined;
@@ -87,6 +89,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config, audio = l
     const previous = voice;
     voice = undefined;
     if (!previous) return;
+    changed();
     previous.turn.abort();
     previous.audio.stop();
     await previous.interrupting;
@@ -101,49 +104,65 @@ export async function tuiAdapter(assistant: Assistant, config: Config, audio = l
     notice("Voice off. Microphone and playback stopped.");
   };
   const startVoice = async () => {
-    if (voice) { notice("Voice is on. Speak naturally; /speak off closes the microphone."); return; }
+    if (voice) return;
     if (conversation.value.docs["pi.live"]?.run) throw new Error("Stop current work before starting voice mode.");
     const target = selected;
     const previousThinking = agentOf(conversation.value).thinkingLevel;
     const onVoice = (event: VoiceEvent) => {
       const current = voice;
       if (!current || current.conversation.id !== target.id) return;
-      if (event.type === "ready") notice("Listening · hands-free · use headphones · /speak off to stop");
+      if (event.type === "ready") current.status.phase = "calibrating";
+      if (event.type === "calibrating") {
+        current.status.phase = "calibrating";
+        current.status.progress = event.value;
+      }
+      if (event.type === "calibrated" || event.type === "speech_discarded") current.status.phase = "listening";
+      if (event.type === "level") current.status.level = event.value ?? 0;
       if (event.type === "speech_start") {
         current.utterance = event.id!;
         current.turn.abort();
         current.audio.interrupt();
         current.interrupting = current.interrupting.then(() => target.abort(context));
         void current.interrupting.catch(report);
-        notice("Listening…");
+        current.status.phase = "hearing";
+        current.status.detail = undefined;
       }
-      if (event.type === "speech_end") notice("Transcribing…");
+      if (event.type === "speech_end") current.status.phase = "transcribing";
       if (event.type === "transcript" && event.id === current.utterance) {
-        if (!event.text?.trim()) { notice("No words recognized. Listening…"); return; }
+        if (!event.text?.trim()) {
+          current.status.phase = "listening";
+          current.status.detail = "Couldn't make that out. Try again.";
+          changed(); return;
+        }
         current.turn = new AbortController();
         const turn = current.turn;
         current.endedAt = event.endedAt!; current.asrDoneAt = event.asrDoneAt!;
         current.firstPCM = false; current.firstTextAt = 0;
-        notice("Thinking…");
+        current.status.phase = "thinking";
         void current.interrupting.then(async () => {
           if (turn.signal.aborted || voice !== current) return;
           await voiceReply(assistant, target, event.text!, turn.signal,
             (phrase) => { if (!turn.signal.aborted) current.audio.speak(phrase); },
             () => { current.firstTextAt = Date.now(); });
           if (!turn.signal.aborted && voice === current) current.audio.finish();
-        }).catch((error) => { if (!turn.signal.aborted) { current.audio.interrupt(); report(error); } });
+        }).catch((error) => { if (!turn.signal.aborted) {
+          current.audio.interrupt(); current.status.phase = "listening"; report(error);
+        } });
       }
       if (event.type === "audio" && !current.firstPCM) {
         current.firstPCM = true;
-        notice(`Speaking · first PCM ${Math.round(Date.now() - current.endedAt)} ms (+ playback) · pause/ASR ${Math.round(current.asrDoneAt - current.endedAt)} ms · model ${Math.round(current.firstTextAt - current.asrDoneAt)} ms`);
+        current.status.phase = "speaking";
+        current.status.detail = `Audio ${Math.round(Date.now() - current.endedAt)}ms · ASR ${Math.round(current.asrDoneAt - current.endedAt)}ms · model ${Math.round(current.firstTextAt - current.asrDoneAt)}ms`;
       }
-      if (event.type === "audio_end") notice("Listening · ready for another turn");
+      if (event.type === "audio_end") current.status.phase = "listening";
       if (event.type === "error") { report(event.message ?? "Voice failed."); void stopVoice().catch(report); }
+      changed();
     };
     const engine = audio(config, onVoice);
     voice = { audio: engine, conversation: target, turn: new AbortController(),
+      status: { phase: "loading", level: 0 },
       utterance: 0, interrupting: Promise.resolve(), firstPCM: false, endedAt: 0, asrDoneAt: 0, firstTextAt: 0 };
-    notice("Loading local speech models… First use downloads model files. Microphone opens after loading.");
+    changed();
     try {
       await target.commit(async (tx) => {
         (await tx.doc(VoiceMode, target.id)).previousThinking = previousThinking ?? "low";
@@ -175,6 +194,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config, audio = l
           contextWindow: m.contextWindow,
         })),
       notices,
+      ...(voice ? { voice: { ...voice.status } } : {}),
       ...(showTasks ? { tasks: tasks.value } : {}),
     }),
     subscribe: (listener) => {
