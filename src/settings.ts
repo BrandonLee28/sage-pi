@@ -7,7 +7,15 @@ export type McpServer = { command: string; args: string[]; env?: string[] } | { 
 export type Settings = {
   model?: { id: string; baseUrl: string; revision: string };
   mcpServers?: Record<string, McpServer>;
+  gateway?: { url: string; token: string };
 };
+
+export function gatewayUrl(value: string): string {
+  const url = new URL(httpUrl(value));
+  if (url.pathname !== "/" || url.search || url.hash)
+    throw new Error("Use a gateway origin without a path or query.");
+  return url.origin;
+}
 
 export function httpUrl(value: string): string {
   const url = new URL(value);
@@ -24,6 +32,11 @@ export function readSettings(dataDir: string): Settings {
     throw new Error("Cannot read settings.json; fix the file before continuing.", { cause: error });
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid settings.json.");
+  if (value.gateway !== undefined) {
+    if (!value.gateway || typeof value.gateway.url !== "string" || typeof value.gateway.token !== "string" ||
+      value.gateway.token.length < 32 || /\s/.test(value.gateway.token)) throw new Error("Invalid saved gateway connection.");
+    gatewayUrl(value.gateway.url);
+  }
   if (value.model !== undefined) {
     if (!value.model || typeof value.model.id !== "string" || !value.model.id.trim() || typeof value.model.revision !== "string" || !value.model.revision)
       throw new Error("Invalid model settings.");

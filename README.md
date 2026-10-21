@@ -83,7 +83,8 @@ sage mcp test NAME          # Connect/list tools; never calls a tool
 sage mcp remove NAME
 sage doctor                # Check config, data access, and model discovery
 sage gateway               # Persistent agent + private terminal API
-sage connect http://your-umbrel:8787   # Mac TUI; no local agent database
+sage connect http://your-umbrel:8787   # Prompt for token, remember connection, open Mac TUI
+sage connect --forget       # Remove the saved client connection
 sage --help
 ```
 
@@ -354,14 +355,21 @@ On the Mac, install the same repository revision and Node 24.2+, run `npm ci` an
 optionally `npm link`, then set only client connection configuration:
 
 ```sh
-export GATEWAY_URL=http://your-umbrel:8787
-export GATEWAY_TOKEN=the-value-you-set-on-the-gateway
+sage connect http://your-umbrel:8787
+# Enter the gateway token in the hidden prompt. It saves after authentication.
+# On later runs:
 sage connect
-# With GATEWAY_URL set, plain `sage` also connects.
+# Plain `sage` also uses the saved connection.
 ```
 
 The client does not load model/service settings or open a local agent database.
 It uses `CLIENT_DATA_DIR` (default `~/.sage`) for audio assets and terminal settings.
+The gateway URL and token are saved atomically in `~/.sage/settings.json` with
+owner-only file permissions (0600). The token is stored locally as plaintext;
+it is not printed or passed in command arguments. `sage connect --forget` removes
+the saved connection. Saved tokens are reused only for the same gateway origin. Existing
+`GATEWAY_URL`/`GATEWAY_TOKEN` environment variables remain optional overrides;
+environment-only connections are not saved unless you supply a URL explicitly.
 To reuse the existing Mac speech runtime, set `VOICE_DATA_DIR` to its existing
 absolute `data/voice` path; alternatively run voice setup with
 `DATA_DIR="${CLIENT_DATA_DIR:-$HOME/.sage}" npm run voice:setup`. Use `/speak` in the connected TUI.
@@ -392,7 +400,8 @@ is under FSL-1.1-MIT; the Driver is MIT. See the upstream
 
 To stop the stack, use Portainer or `docker compose down`; retain the volumes.
 `npm run daemon` / `sage --headless` remain available for background operation with
-no terminal API. Plain `sage` without `GATEWAY_URL` retains standalone local mode.
+no terminal API. Plain `sage` without a saved connection or `GATEWAY_URL` retains
+standalone local mode.
 
 `npm run test:docker` is an opt-in smoke test after building the image. It starts
 fresh AMD64 containers, disposable volumes, and a mock model; verifies a real Cua

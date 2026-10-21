@@ -1,24 +1,47 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readConfig } from "./config.ts";
+import { gatewayUrl, readSettings, saveSettings } from "./settings.ts";
 
 const args = process.argv.slice(2);
-if (!args.length && process.env.GATEWAY_URL) args.push("connect");
+const clientDir = process.env.CLIENT_DATA_DIR ?? join(process.env.HOME ?? process.cwd(), ".sage");
+if (!args.length && (process.env.GATEWAY_URL || readSettings(clientDir).gateway)) args.push("connect");
 if (args[0] === "connect") {
-  if (args.length > 2) throw new Error("Usage: sage connect [http://gateway:8787]");
-  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("sage connect needs a local terminal.");
-  const url = args[1] ?? process.env.GATEWAY_URL;
-  if (!url) throw new Error("Provide a gateway URL or set GATEWAY_URL.");
-  // The client never opens Pi storage, reads server settings, or starts Telegram/MCP.
-  const dataDir = process.env.CLIENT_DATA_DIR ?? join(process.env.HOME ?? process.cwd(), ".sage");
-  process.env.PI_CODING_AGENT_DIR = join(dataDir, "pi");
-  const [{ connectGateway }, { runDurableTui }, { SettingsManager }] = await Promise.all([
-    import("./gateway-client.ts"), import("../vendor/pi-durable-tui/tui.ts"),
-    import("../node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js"),
-  ]);
-  const remote = await connectGateway(url, process.env.GATEWAY_TOKEN ?? "", dataDir);
-  try { await runDurableTui(remote.source, remote.controller, SettingsManager.inMemory()); }
-  finally { await remote.dispose(); }
+  if (args.length > 2) throw new Error("Usage: sage connect [http://gateway:8787 | --forget]");
+  const settings = readSettings(clientDir);
+  if (args[1] === "--forget") {
+    delete settings.gateway;
+    await saveSettings(clientDir, settings);
+    console.log("Saved gateway connection removed. Environment overrides still apply.");
+  } else {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("sage connect needs a local terminal.");
+    const target = args[1] || process.env.GATEWAY_URL || settings.gateway?.url;
+    if (!target) throw new Error("Connect once with: sage connect http://gateway:8787");
+    const url = gatewayUrl(target);
+    let token = process.env.GATEWAY_TOKEN || (settings.gateway && gatewayUrl(settings.gateway.url) === url ? settings.gateway.token : "");
+    let prompted = false;
+    if (!token) {
+      const { SageHeader, registerSageTheme, textPrompt } = await import("./cli-ui.ts");
+      registerSageTheme();
+      token = await textPrompt(new SageHeader({ section: "Gateway", cwd: url }), "Gateway token (hidden; Esc cancels)", true) ?? "";
+      if (!token) process.exit(0);
+      prompted = true;
+    }
+    if (token.length < 32 || /\s/.test(token)) throw new Error("Gateway token must contain at least 32 non-whitespace characters.");
+    // The client never opens Pi storage, reads server settings, or starts Telegram/MCP.
+    process.env.PI_CODING_AGENT_DIR = join(clientDir, "pi");
+    const [{ connectGateway }, { runDurableTui }, { SettingsManager }] = await Promise.all([
+      import("./gateway-client.ts"), import("../vendor/pi-durable-tui/tui.ts"),
+      import("../node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js"),
+    ]);
+    const remote = await connectGateway(url, token, clientDir);
+    try {
+      // Save only after authentication succeeds. Never reuse a saved token for another origin.
+      if (args[1] || prompted) await saveSettings(clientDir, { ...settings, gateway: { url, token } });
+      await runDurableTui(remote.source, remote.controller, SettingsManager.inMemory());
+    }
+    finally { await remote.dispose(); }
+  }
 } else if (args.length && !(args.length === 1 && ["--headless", "gateway"].includes(args[0]!))) {
   try { await (await import("./manage.ts")).manage(args); }
   catch (error) {

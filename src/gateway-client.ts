@@ -2,12 +2,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { DurableController, DurableView, DurableViewSource, Inspection } from "./tui-adapter.ts";
 import type { GatewayFrame } from "./gateway.ts";
 import { localVoice, type VoiceEvent } from "./voice.ts";
+import { gatewayUrl } from "./settings.ts";
 
 /** The Mac owns audio and rendering; the gateway owns all agent state and execution. */
 export async function connectGateway(url: string, token: string, dataDir: string, audio = localVoice) {
-  const base = new URL(url);
-  if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash || base.pathname !== "/")
-    throw new Error("Use an HTTP(S) gateway origin without credentials, path, or query.");
+  const base = new URL(gatewayUrl(url));
   if (!token || /\s/.test(token)) throw new Error("Set GATEWAY_TOKEN on the Mac to match the gateway.");
   const lifetime = new AbortController();
   let snapshot!: DurableView, session = "", connected = false;

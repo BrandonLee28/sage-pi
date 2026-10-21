@@ -21,9 +21,11 @@ sage mcp test NAME           Connect and list tools without calling them
 sage doctor                  Check local setup and model discovery
 sage --headless              Run in the background (no TUI)
 sage gateway                 Run the persistent gateway (LAN/Tailscale API)
-sage connect [URL]           Open this Mac's TUI against the gateway
+sage connect [URL]           Connect and remember a gateway; prompt for token once
+sage connect --forget        Remove the saved client connection
 
 Settings: DATA_DIR/settings.json. Secrets stay in .env/environment.
+Client connection/token: CLIENT_DATA_DIR/settings.json (default ~/.sage), owner-only.
 Restart Sage after changes; running conversations are updated on restart.`;
 
 async function advertisedModels(baseUrl: string, apiKey: string) {

@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, access } from "node:fs/promises";
+import { mkdtemp, rm, access, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
@@ -12,6 +14,7 @@ import { readConfig } from "../src/config.ts";
 import { openGateway, voiceEvent } from "../src/gateway.ts";
 import { connectGateway } from "../src/gateway-client.ts";
 import type { VoiceEvent } from "../src/voice.ts";
+import { gatewayUrl, readSettings, saveSettings } from "../src/settings.ts";
 
 const token = "disposable-gateway-test-token-00000000";
 async function until(check: () => boolean | Promise<boolean>) {
@@ -32,6 +35,59 @@ async function fixture() {
   return { directory, config, faux, assistant, gateway, open, url: `http://127.0.0.1:${address.port}`,
     async close() { await gateway.close(); await assistant.close(); await rm(directory, { recursive: true, force: true }); } };
 }
+
+test("CLI prompts once, saves an authenticated connection privately, reconnects without exports, and forgets it", async () => {
+  const f = await fixture();
+  const directory = join(f.directory, "mac-client");
+  const preload = join(f.directory, "terminal.mjs");
+  await writeFile(preload, `
+process.stdin.isTTY = true;
+process.stdin.setRawMode = () => {};
+process.stdout.isTTY = true;
+process.stdout.columns = 80;
+process.stdout.rows = 24;
+`);
+  const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const run = (args: string[], prompt: boolean, overrideToken = "") => new Promise<string>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", preload, cli, ...args], { env: {
+      ...process.env, CLIENT_DATA_DIR: directory, DATA_DIR: join(f.directory, "unused-server"),
+      GATEWAY_URL: "", GATEWAY_TOKEN: overrideToken, TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "",
+    } });
+    let output = "", errors = "", sent = false, exited = false;
+    const timeout = setTimeout(() => { child.kill(); reject(new Error("CLI connection test timed out")); }, 10000);
+    child.stdout.on("data", (data) => {
+      output += data;
+      if (prompt && !sent && /Gateway token/.test(output)) { sent = true; child.stdin.write(token + "\r"); }
+      if (!exited && /Ask Sage anything/.test(output)) { exited = true; child.stdin.write("\x04"); }
+    });
+    child.stderr.on("data", (data) => { errors += data; });
+    child.on("error", (error) => { clearTimeout(timeout); reject(error); });
+    child.on("exit", (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) reject(new Error(`CLI exited ${code}: ${errors}`));
+      else resolve(output);
+    });
+  });
+  try {
+    const first = await run(["connect", f.url], true);
+    assert.doesNotMatch(first, new RegExp(token));
+    assert.deepEqual(readSettings(directory).gateway, { url: f.url, token });
+    assert.equal((await stat(join(directory, "settings.json"))).mode & 0o777, 0o600);
+    const second = await run([], false);
+    assert.doesNotMatch(second, /Gateway token/);
+    await assert.rejects(run(["connect", f.url], false, "disposable-wrong-gateway-token-000000"), /401/);
+    assert.deepEqual(readSettings(directory).gateway, { url: f.url, token });
+    assert.equal(f.faux.state.callCount, 0);
+    await assert.rejects(access(join(directory, "agent.sqlite")), { code: "ENOENT" });
+    const before = readSettings(directory);
+    await saveSettings(directory, { ...before, mcpServers: {} });
+    await run(["connect", "--forget"], false);
+    assert.equal(readSettings(directory).gateway, undefined);
+    assert.deepEqual(readSettings(directory).mcpServers, {});
+    assert.throws(() => gatewayUrl("http://example.invalid/other?token=secret"), /origin/);
+    assert.throws(() => gatewayUrl("http://user:password@example.invalid"), /credentials/);
+  } finally { await f.close(); }
+});
 
 test("private gateway validates callers and commands, preserves native sessions, and never opens client storage", async () => {
   const f = await fixture();
