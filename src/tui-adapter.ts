@@ -145,7 +145,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config) {
         }
         await selected.compact(instructions, context);
       }),
-    abort: () => guard(() => selected.abort(context)),
+    abort: () => guard(async () => { await assistant.noteHumanActivity(); await selected.abort(context); }),
     cycleThinking: () => guard(async () => {
       const agent = agentOf(conversation.value);
       const model = agent.model && assistant.models.getModel(agent.model.provider, agent.model.modelId);

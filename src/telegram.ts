@@ -94,6 +94,7 @@ export function telegramGateway(config: Config, existingBot?: Bot) {
             ctx.chat?.type === "private",
         )
         .on("message", async (ctx) => {
+          await assistant.noteHumanActivity();
           const conversation = await assistant.telegramConversation(ctx.message.message_thread_id);
           if (ctx.message.text === "/stop") {
             stopTyping(ctx.message.message_thread_id, "Stopped");

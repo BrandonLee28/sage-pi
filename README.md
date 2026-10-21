@@ -19,6 +19,7 @@ are the change history.
 | --- | --- |
 | Terminal conversations and durable recovery | Upstream Pi TUI and native Pi storage |
 | Memory, responsibilities, and recurring routines | Native documents and tasks |
+| Quiet, interruptible heartbeat with Telegram updates | Native Pi task and shared `HEARTBEAT.md` |
 | Owner-only Telegram topics, uploads, and progress | Optional Telegram gateway |
 | Calendar, document reading, and transcript recall | Native Pi extensions |
 | Local model, search, scraping, and optional Gmail | Configured services and native tools |
@@ -286,7 +287,48 @@ when a search misses something. This is not semantic search.
 
 Skills stay in ordinary `data/workspace/skills/<name>/SKILL.md` files for you to
 manage. Sage reads them when relevant and only changes them when you explicitly ask.
-There is no automatic skill review, improvement hook, or background reflection.
+Skills have no automatic review, improvement hook, or background reflection.
+
+## Heartbeat
+
+Sage can quietly review ongoing responsibilities and advance authorized work without
+a new message. Delegate an outcome in chat; no domain, vault, folder, or service is
+built into the heartbeat. Sage uses your workspace, skills, memory, and conversation
+recall for context. Configure any external sources separately.
+
+`data/workspace/HEARTBEAT.md` holds approved responsibilities, progress, last contact,
+and your feedback. Explicit delegation authorizes an entry. Sage asks before adding
+a responsibility it proposes, then maintains existing entries and saves direct
+feedback about contact frequency or tone. These are model instructions, using native
+file tools; there is no approval engine or automatic skill-training system. Keep the
+file concise: its contents refresh in every conversation's system prompt. Startup
+seeds the template when missing and preserves an existing file.
+
+With Telegram configured, a native Pi background task checks eligibility once a
+minute without inference. A model check is eligible 15 minutes after the previous
+check finishes, after at least 10 minutes without human messages, and only when no
+foreground generation, tools, compaction, or pending input remain. Checks run around
+the clock; Sage judges whether an update is useful and appropriate. Silence uses the
+exact final response `HEARTBEAT_SILENT`, which is never sent to Telegram. Useful final
+answers use the existing Telegram style and durable delivery, to the owner's main
+chat. No typing/status bubbles are sent for heartbeat work. Without Telegram
+transport, the heartbeat admits no new model checks.
+
+Heartbeat work uses a dedicated saved Pi conversation and the same single inference
+stream. A human message in any Telegram topic or TUI session, including queued TUI
+input, aborts heartbeat generation/tools before admitting the message. Telegram
+uploads and `/stop`, and the TUI stop control, also interrupt it. Unfinished checks
+become eligible again after 10 quiet minutes (within the one-minute eligibility
+resolution), once foreground work finishes. Pi cancellation cannot undo an action
+already performed; a tool must finish responding to cancellation before the abort
+completes. Later checks inspect saved progress/tool results before continuing.
+
+The timer, in-flight input, and delivery survive process restart. Missed intervals
+do not accumulate. New human input suppresses any remaining stale heartbeat delivery
+chunks/retries; a message already accepted by Telegram cannot be recalled. As with
+other delivery, a crash immediately after Telegram accepts a chunk can duplicate it.
+The process must remain running. Restart after updating to load the extension; no
+existing runtime instructions or responsibilities are overwritten.
 
 ## Recurring routines
 
@@ -483,6 +525,7 @@ headless server; follow the upstream headless instructions and keep credentials 
 - `extensions/calendar.ts`: iCloud calendar tools using CalDAV and standard iCalendar data.
 - `extensions/recall.ts`: Bounded search/read of native transcript history.
 - `extensions/routines.ts`: Recurring schedules backed by native Pi tasks/documents.
+- `extensions/heartbeat.ts`: Idle eligibility, native heartbeat task, and human-input preemption.
 - `extensions/documents.ts`: Read PDF/DOCX text with existing native file tools for other inputs.
 
 The demo TUI is not exported by the npm package, so its original source is included
