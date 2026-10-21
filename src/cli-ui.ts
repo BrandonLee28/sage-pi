@@ -10,6 +10,7 @@ import { CustomEditor } from "../node_modules/@earendil-works/pi-coding-agent/di
 import {
   initTheme, loadThemeFromPath, setRegisteredThemes, theme,
 } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import type { VoiceStatus } from "./voice.ts";
 
 const version = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 const wordmark = [
@@ -95,6 +96,63 @@ export class SageFooter implements Component {
       row("/ commands · shift+tab effort", `${clean(this.model)}:${clean(this.thinking)}${this.context ? " · " + (this.contextWarning ? theme.fg("error", clean(this.context)) : clean(this.context)) : ""}`),
       row("enter send · alt+enter queue · esc stop", clean(this.usage)),
     ];
+  }
+}
+
+/** A transient terminal component. Animation never enters the conversation or runs inference. */
+export class SageVoice implements Component {
+  private status?: VoiceStatus;
+  private timer?: ReturnType<typeof setInterval>;
+  private frame = 0;
+  private repaint: () => void;
+  private height: () => number;
+  constructor(repaint: () => void, height = () => 24) { this.repaint = repaint; this.height = height; }
+  update(status?: VoiceStatus) {
+    this.status = status;
+    if (status && !this.timer) {
+      this.timer = setInterval(() => { this.frame++; this.repaint(); }, 100);
+      this.timer.unref();
+    } else if (!status) this.dispose();
+  }
+  dispose() { clearInterval(this.timer); this.timer = undefined; this.status = undefined; }
+  invalidate() {}
+  render(width: number): string[] {
+    const s = this.status;
+    if (!s) return [];
+    const labels = { loading: "Loading speech models", calibrating: "Calibrating · stay quiet",
+      listening: "Listening", hearing: "Hearing you", transcribing: "Transcribing",
+      thinking: "Thinking", speaking: "Speaking" };
+    const energy = Math.max(0, Math.min(1, s.level));
+    const bars = Math.round(energy * 12);
+    const meter = "[" + "|".repeat(bars) + ".".repeat(12 - bars) + "]";
+    const info = [theme.fg("accent", theme.bold("voice")) + "  " + theme.bold(labels[s.phase]),
+      s.phase === "calibrating" ? `${Math.max(0, Math.ceil(2 * (1 - (s.progress ?? 0))))}s · measuring room noise`
+        : s.phase === "loading" ? "Microphone opens after loading"
+        : theme.fg("accent", meter) + theme.fg("dim", "  microphone"),
+      theme.fg("dim", s.detail ?? "Echo cancellation · speak to interrupt"),
+      theme.fg("dim", "/speak off · esc stop")];
+    if (width < 38 || this.height() < 20) return info.slice(0, 3).map((line) => truncateToWidth(" " + line, Math.max(1, width)));
+    const rows = this.height() >= 32 ? 9 : 7;
+    const columns = rows * 2 + 5;
+    const t = this.frame * .12;
+    const active = s.phase === "hearing" ? energy : s.phase === "speaking" ? .45 : .08;
+    const ramp = ".:-=+*#%@";
+    return Array.from({ length: rows }, (_, y) => {
+      let orb = "";
+      for (let x = 0; x < columns; x++) {
+        const nx = (x - (columns - 1) / 2) / ((columns - 2) / 2);
+        const ny = (y - (rows - 1) / 2) / (rows / 2);
+        const radius = Math.hypot(nx, ny);
+        const edge = .94 + Math.sin(Math.atan2(ny, nx) * 3 + t * 2) * active * .1;
+        if (radius > edge) { orb += " "; continue; }
+        const z = Math.sqrt(Math.max(0, 1 - radius * radius));
+        const cloud = Math.sin(nx * 3 + ny * 4 - t) * .16 + Math.cos(ny * 6 + t * 1.4) * .1;
+        const shade = Math.max(0, Math.min(.999, .45 + z * .32 - nx * .2 - ny * .15 + cloud));
+        const color = shade > .78 ? "text" : shade > .45 ? "accent" : "dim";
+        orb += theme.fg(color, ramp[Math.floor(shade * ramp.length)]!);
+      }
+      return truncateToWidth(" " + orb + "   " + (info[y - 1] ?? ""), Math.max(1, width));
+    });
   }
 }
 

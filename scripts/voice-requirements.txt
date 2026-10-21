@@ -1,0 +1,3 @@
+ptts==0.4.0
+sherpa-onnx==1.13.8
+webrtcvad-wheels==2.0.14.post1

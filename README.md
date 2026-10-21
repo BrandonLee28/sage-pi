@@ -150,6 +150,7 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | `/compact [instructions]` | Compact while idle                                                     |
 | `/model`                  | Refresh and select models advertised by your llama.cpp server          |
 | `/new`                    | Create and switch to a fresh saved chat with the current model/reasoning |
+| `/speak` / `/speak off`   | Start/stop the optional local hands-free voice prototype (macOS)        |
 | `/sessions`               | Create a session or return to a saved local chat or Telegram thread     |
 | `/skills`                 | Inspect available skills, descriptions, paths, and full files           |
 | `/memory`                 | Inspect saved memory, sources, timestamps, prompt inclusion, and USER.md |
@@ -189,6 +190,122 @@ timezone, next run, last result, saved instructions, or reminder details. Times
 show the routine's saved timezone (the configured timezone for reminders), with
 UTC timestamps in the details. Due dates without a wake are not scheduled reminders.
 This read-only snapshot refreshes on opening and does not run or change schedules.
+
+## Local hands-free voice prototype (macOS)
+
+`/speak` in the existing Pi TUI opens the Mac's microphone after local speech models
+load. Stay quiet for a **two-second room-noise calibration** each time voice starts.
+An animated ASCII orb in Sage's palette shows the live microphone level and the
+current state: loading, calibrating, listening, hearing you, transcribing, thinking,
+or speaking. It stays above the input and stops animating when voice closes.
+Speak naturally; a 400 ms pause ends a turn. Sustained speech detection interrupts local
+playback and aborts the current Pi run, then the recognized text enters the same
+saved conversation. Sage speaks phrases from Pi's committed response stream while
+the rest of the response is still generating. Thinking and tool arguments/results
+are never spoken. Native Pi continues to own inference, tools, cancellation, and
+storage. There is no web UI, HTTP server, or second agent loop.
+
+Capture and playback share macOS's native `AVAudioEngine` with
+[voice processing](https://developer.apple.com/videos/play/wwdc2019/510/) enabled,
+so echo cancellation has a reference for Sage's speaker output. The mic stays open
+during playback for interruption. Use the Mac's default input/output devices, selected
+in System Settings. Headphones can still help in noisy rooms or at high speaker volume.
+This is a turn-based ASR → existing LLM → TTS pipeline with interruption.
+
+Install optional speech bindings once (requires `uv`, Apple's Command Line Tools,
+and macOS 10.15+). Rerun setup after updates to the native audio helper:
+
+```sh
+brew install uv
+# If Apple's compiler is missing: xcode-select --install
+npm run voice:setup
+```
+
+The primary application remains TypeScript. A small stdio subprocess uses pinned
+native bindings for [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx),
+[WebRTC VAD](https://github.com/daanzu/py-webrtcvad-wheels), and
+[Phonon](https://github.com/gradium-ai/xn-ptts/tree/v0.4.0). Both speech models stay
+loaded across turns. A small Swift helper handles only native audio I/O and echo
+cancellation; setup compiles it to `DATA_DIR/voice/audio`. There is no Swift app UI
+or agent logic, and no FFmpeg/FFplay requirement. Optional Python packages live in `DATA_DIR/voice/runtime`,
+separate from npm dependencies. Setup preserves an existing runtime and does not
+start the microphone. Recognition uses NVIDIA's **Parakeet Unified English 0.6B**,
+with the int8 ONNX export and four CPU threads. Setup downloads and verifies the
+public model once (478 MiB download, about 633 MiB installed), into
+`DATA_DIR/voice/parakeet-unified-en-0.6b`. No Hugging Face login is needed for ASR.
+This matches the model family available in Handy, using a different local runtime.
+The existing pause detector sends each completed utterance to Parakeet; recognition
+does not yet produce partial transcripts while you speak. TTS still streams.
+`VOICE_ASR_MODEL` may point to an existing compatible folder containing
+`encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, and `tokens.txt`.
+Older Whisper names such as `base.en` are no longer accepted. Rerun setup after
+upgrading from Whisper; it installs Parakeet without touching chats or workspace files.
+
+For Phonon 40M, accept its terms on the
+[model page](https://huggingface.co/gradium/phonon-40m-en). Either sign in locally
+with `uvx --from huggingface-hub hf auth login`, or download these four files from
+the website into one folder, retaining their names:
+
+- `config.json`
+- `tokenizer.json`
+- `model.q8.gguf`
+- `default-voice.safetensors`
+
+For a downloaded model, set `VOICE_TTS_MODEL` to that folder in `.env`, or for one run:
+
+```sh
+VOICE_TTS_MODEL="/absolute/path/to/phonon-40m-en" npm run voice:try
+```
+
+`voice:try` opens a disposable chat with your configured LLM and starts voice mode.
+Telegram, shell, calendar, web services, and configured MCP servers are disabled.
+Its workspace/transcript is deleted on exit; the speech runtime and model cache
+are retained. This is the quickest way to judge latency without using your normal
+conversation or account tools. Hugging Face browser login and the Codex connector
+are separate from the speech subprocess's authentication; a local model folder
+requires no Hugging Face token at runtime. Models and credentials never belong in Git.
+
+In normal `npm start`, use `/speak` or `/speak on`. `/speak off`, Esc, typing a chat
+message, switching conversations, or exiting closes microphone/playback. Voice mode
+temporarily sets the selected conversation's native thinking level to Off; its prior
+level is restored on exit or restart, unless you chose another level yourself.
+Model calls and context still use the same backend and single inference stream.
+
+`data/workspace/VOICE.md` supplies the active conversation's spoken style and scope.
+It asks for natural wording without emoji/kaomoji or decorative punctuation, short
+answers, current tool results for live facts, and quick lookups/simple actions.
+Long research or multistep work should move to text. These are model instructions,
+not hard tool limits. Edit that file to tune the behavior; it refreshes on the next
+model turn. The template in `instructions/VOICE.md` seeds new workspaces; startup
+preserves existing runtime edits. Text-only conversations retain their normal style.
+The native voice extension omits `<text_style>...</text_style>` blocks from the
+rendered SOUL.md only for the active voice conversation, retaining shared values.
+Put visual-only personality cues inside that block to avoid contradictory prompts.
+Calendar reads include `localStart`, `localEnd`, and `localTimezone` alongside the
+source timestamps, so spoken answers can use local times without model arithmetic.
+All-day dates remain dates, including their exclusive end date.
+
+The orb reports time to the first PCM chunk since detected end of speech,
+pause + ASR time, and model time to first text.
+**First PCM is not measured speaker latency**: sentence buffering and playback
+buffering add delay. The speaking state remains active until native playback finishes.
+The recognizer waits for a pause before decoding; this version does not provide live
+partial transcription or semantic end-of-turn detection. Change `VOICE_SILENCE_MS`
+(200–2000, in 20 ms steps) to compare responsiveness with tolerance for pauses.
+The calibrated energy gate and WebRTC VAD require sustained speech above room noise;
+brief bursts are discarded before transcription, and low-confidence recognition is
+ignored. macOS may request microphone permission for your terminal.
+SSH does not forward your Mac's microphone. Echo cancellation depends on the audio
+route and environment; it is not a guarantee against every speaker-induced trigger.
+New speech supersedes an unfinished voice turn; an older transcription that has
+not yet been admitted to Pi is discarded to avoid a late, out-of-order request.
+
+Raw microphone/audio buffers stay in memory; normal sessions save transcribed text
+and generated answers. Microphone sessions never auto-resume after a crash. Pi's
+abort waits for tools to respond and cannot undo effects already completed. Very
+long speech is split into bounded utterances, and excessive queued output stops
+voice with an error. Streaming words already heard cannot be taken back if a model
+request later fails/retries. Terminal errors keep the text transcript available.
 
 ## Homelab container
 
@@ -321,7 +438,7 @@ restart. Stable message paths and submission IDs avoid duplicate ingestion.
   Pi's bundled Photon processor resizes/converts it when needed.
 - PDF: `document_read` extracts a selected page range with [unpdf](https://github.com/unjs/unpdf).
 - Word `.docx`: `document_read` extracts text with [Mammoth](https://github.com/mwilliamson/mammoth.js).
-- Other documents are saved, with no promise they can be parsed. Voice/audio are not enabled.
+- Other documents are saved, with no promise they can be parsed. Telegram voice/audio input is not enabled; local TUI voice is separate.
 
 Downloads are limited to 20 MB, matching the hosted [Telegram file API](https://core.telegram.org/bots/api#getfile).
 Documents are read as source content; macros and uploaded executables are not run.
@@ -477,6 +594,7 @@ headless server; follow the upstream headless instructions and keep credentials 
 - `src/tui-adapter.ts`: Connect our existing harness to the upstream TUI's view/controller.
 - `vendor/pi-durable-tui/tui.ts`: Actual upstream demo renderer, with provenance and MIT license.
 - `src/assistant.ts`: Assemble native Pi; load extensions, instructions, and skills.
+- `src/voice.ts`, `src/voice-reply.ts`, `scripts/voice-worker.py`, `scripts/voice-audio.swift`: Local speech, macOS echo cancellation, and native Pi stream observation.
 - `src/personal.ts`: Individual memory records, responsibilities, native wake task.
 - `src/model.ts`: Local OpenAI-compatible provider.
 - `src/telegram.ts`, `src/web.ts`: Optional service adapters.

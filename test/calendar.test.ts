@@ -64,7 +64,7 @@ test("iCloud tools read agendas, safely serialize dates, preserve edits, and che
   const models = createModels();
   models.setProvider(faux.provider);
   const assistant = await openAssistant({
-    ...readConfig(), dataDir, mcpServers: {}, enableShell: false,
+    ...readConfig(), dataDir, timezone: "America/New_York", mcpServers: {}, enableShell: false,
     telegramToken: "", telegramChat: "", searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "",
     appleId: "test@example.invalid", appleAppPassword: "test-only-password", appleCalendarUrl: calendar.url,
   }, { models, model: { provider: "faux", modelId: "faux-1" } });
@@ -76,7 +76,9 @@ test("iCloud tools read agendas, safely serialize dates, preserve edits, and che
     assert.equal((await (await assistant.submit("Calendar test.")).wait(context)).status, "done");
     const result = (await assistant.root.context(context)).messages.findLast((message) => message.role === "toolResult");
     assert.ok(result?.role === "toolResult");
-    return { error: Boolean(result.isError), text: JSON.stringify(result.content) };
+    const content = result.content.find((part) => part.type === "text");
+    return { error: Boolean(result.isError), text: JSON.stringify(result.content),
+      value: !result.isError && content?.type === "text" ? JSON.parse(content.text) : null };
   };
   try {
     const listed = await run("calendar_read", { action: "calendars" });
@@ -88,6 +90,18 @@ test("iCloud tools read agendas, safely serialize dates, preserve edits, and che
     });
     assert.equal(agenda.error, false);
     assert.ok(agenda.text.includes("Original"));
+    assert.equal(agenda.value.events[0].start, "2030-01-02T14:00:00Z");
+    assert.match(agenda.value.events[0].localStart, /9:00\s*AM EST/u);
+    assert.match(agenda.value.events[0].localEnd, /10:00\s*AM EST/u);
+    assert.equal(agenda.value.events[0].localTimezone, "America/New_York");
+    const winter = objects[0].data;
+    objects[0].data = String(winter).replaceAll("20300102", "20300702");
+    const summer = await run("calendar_read", {
+      action: "events", start: "2030-07-01T00:00:00-04:00", end: "2030-07-08T00:00:00-04:00",
+    });
+    assert.match(summer.value.events[0].localStart, /10:00\s*AM EDT/u);
+    assert.match(summer.value.events[0].localEnd, /11:00\s*AM EDT/u);
+    objects[0].data = winter;
     assert.ok((await run("calendar_read", { action: "events", start: "2030-01-01", end: "2030-01-02" })).error);
     const title = "Study, math;\nBEGIN:VEVENT";
     const created = await run("calendar_write", {
@@ -103,6 +117,12 @@ test("iCloud tools read agendas, safely serialize dates, preserve edits, and che
       action: "create", title: "All day", start: "2030-01-04", end: "2030-01-05",
     })).error, false);
     assert.ok(new ICAL.Event(new ICAL.Component(ICAL.parse(String(objects[2].data))).getFirstSubcomponent("vevent")!).startDate.isDate);
+    const allDay = await run("calendar_read", {
+      action: "events", start: "2030-01-01T00:00:00-05:00", end: "2030-01-08T00:00:00-05:00",
+    });
+    const dayEvent = allDay.value.events.find((item: { allDay: boolean }) => item.allDay);
+    assert.equal(dayEvent.localStart, "2030-01-04");
+    assert.equal(dayEvent.localEnd, "2030-01-05", "all-day exclusive end dates must not shift with timezone");
     assert.equal((await run("calendar_write", { action: "update", eventUrl: objects[0].url, title: "Updated" })).error, false);
     const updated = new ICAL.Component(ICAL.parse(String(objects[0].data))).getFirstSubcomponent("vevent")!;
     assert.equal(updated.getFirstPropertyValue("description"), "Keep this");

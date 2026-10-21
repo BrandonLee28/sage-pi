@@ -39,7 +39,7 @@ import { ToolExecutionComponent, type ToolRenderers } from "../../node_modules/@
 import { UserMessageComponent } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/user-message.js";
 import { getEditorTheme, getMarkdownTheme, theme } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { InteractiveThemeController } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-controller.js";
-import { SageDetails, SageEditor, SageFooter, SageHeader, SagePicker, registerSageTheme } from "../../src/cli-ui.ts";
+import { SageDetails, SageEditor, SageFooter, SageHeader, SagePicker, SageVoice, registerSageTheme } from "../../src/cli-ui.ts";
 import { agentOf, type DurableController, type DurableView, type DurableViewSource, type Inspection } from "../../src/tui-adapter.ts";
 
 /** The summary that replaced earlier context: collapsed to one line until expanded. */
@@ -90,6 +90,7 @@ export class DurableTui {
 	readonly #queue = new Container();
 	readonly #notices = new Container();
 	readonly #footer = new SageFooter();
+	readonly #voice = new SageVoice(() => this.#ui.requestRender(), () => this.#ui.terminal.rows);
 	readonly #editorContainer = new Container();
 	readonly #editor: SageEditor;
 	readonly #cwd: string;
@@ -120,6 +121,7 @@ export class DurableTui {
 			embedWorkingStatus: true,
 		});
 		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
+			{ name: "speak", description: "Hands-free local voice; /speak off stops the microphone" },
 			{ name: "skills", description: "Inspect available skills (read only)" },
 			{ name: "memory", description: "Inspect saved memory and profile (read only)" },
 			{ name: "schedules", description: "Inspect recurring routines and reminders (read only)" },
@@ -161,6 +163,7 @@ export class DurableTui {
 			{ component: this.#tasks, shrink: 1, minSize: 0 },
 			{ component: this.#queue, shrink: 1, minSize: 0 },
 			{ component: this.#notices, shrink: 1, minSize: 0 },
+			{ component: this.#voice, shrink: 1, minSize: 0 },
 			{ component: this.#editorContainer, shrink: 1, minSize: 3 },
 			{ component: this.#footer, shrink: 1, minSize: 0 },
 		]);
@@ -170,6 +173,7 @@ export class DurableTui {
 			this.#tasks,
 			this.#queue,
 			this.#notices,
+			this.#voice,
 			this.#editorContainer,
 			this.#footer,
 		]) {
@@ -195,6 +199,7 @@ export class DurableTui {
 
 	stop(): void {
 		this.#discardTools();
+		this.#voice.dispose();
 		this.#indicator?.dispose();
 		this.#ui.stop();
 	}
@@ -264,6 +269,7 @@ export class DurableTui {
 		this.#syncTasks(view.tasks);
 		this.#syncQueue((view.conversation.docs["pi.inbox"] ?? { items: [] }) as InboxState);
 		this.#syncNotices(view);
+		this.#voice.update(view.voice);
 		this.#editor.borderColor = theme.getThinkingBorderColor(agentOf(view.conversation).thinkingLevel ?? "off");
 		this.#syncStatus(live);
 		this.#syncFooter(view);
