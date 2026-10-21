@@ -2,24 +2,12 @@ import { readFileSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
-
-export const clientDataDir = () => process.env.CLIENT_DATA_DIR ?? join(homedir(), ".sage");
 
 export type McpServer = { command: string; args: string[]; env?: string[] } | { url: string; bearerTokenEnv?: string };
 export type Settings = {
   model?: { id: string; baseUrl: string; revision: string };
   mcpServers?: Record<string, McpServer>;
-  gateway?: { url: string; token: string };
-  voice?: { ttsModel: string };
 };
-
-export function gatewayUrl(value: string): string {
-  const url = new URL(httpUrl(value));
-  if (url.pathname !== "/" || url.search || url.hash)
-    throw new Error("Use a gateway origin without a path or query.");
-  return url.origin;
-}
 
 export function httpUrl(value: string): string {
   const url = new URL(value);
@@ -36,13 +24,6 @@ export function readSettings(dataDir: string): Settings {
     throw new Error("Cannot read settings.json; fix the file before continuing.", { cause: error });
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid settings.json.");
-  if (value.voice !== undefined && (!value.voice || typeof value.voice.ttsModel !== "string" || !value.voice.ttsModel.trim()))
-    throw new Error("Invalid saved voice model.");
-  if (value.gateway !== undefined) {
-    if (!value.gateway || typeof value.gateway.url !== "string" || typeof value.gateway.token !== "string" ||
-      value.gateway.token.length < 32 || /\s/.test(value.gateway.token)) throw new Error("Invalid saved gateway connection.");
-    gatewayUrl(value.gateway.url);
-  }
   if (value.model !== undefined) {
     if (!value.model || typeof value.model.id !== "string" || !value.model.id.trim() || typeof value.model.revision !== "string" || !value.model.revision)
       throw new Error("Invalid model settings.");

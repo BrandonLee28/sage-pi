@@ -1,23 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { SageHeader, SagePicker, SageSecretInput, SageVoice, registerSageTheme } from "../src/cli-ui.ts";
+import { SageHeader, SagePicker, SageVoice, registerSageTheme } from "../src/cli-ui.ts";
 
 registerSageTheme();
-
-test("the native secret input accepts a token without rendering it", () => {
-  const input = new SageSecretInput({ prompt: "> " });
-  input.handleInput("disposable-token-that-must-not-be-rendered");
-  for (const width of [1, 20, 80]) {
-    const rows = input.render(width);
-    assert.doesNotMatch(rows.join(""), /disposable|token/);
-    assert.ok(rows.every((row) => visibleWidth(row) <= width));
-  }
-  let submitted = "";
-  input.onSubmit = (value) => { submitted = value; };
-  input.handleInput("\r");
-  assert.equal(submitted, "disposable-token-that-must-not-be-rendered");
-});
 
 test("the voice orb reacts, animates, fits narrow screens, and stops when hidden", async () => {
   let repaints = 0;

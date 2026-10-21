@@ -2,10 +2,8 @@
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 
-// Only explicit server commands load server credentials. Mac startup is always a client.
+// Resolve configuration beside this checkout even when invoked from another directory.
 process.chdir(fileURLToPath(new URL("../", import.meta.url)));
-if (["gateway", "--headless", "model", "mcp", "doctor"].includes(process.argv[2])) {
-  try { loadEnvFile(".env"); }
-  catch (error) { if (error.code !== "ENOENT") throw error; }
-}
+try { loadEnvFile(".env"); }
+catch (error) { if (error.code !== "ENOENT") throw error; }
 await import("../src/cli.ts");

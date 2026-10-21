@@ -22,59 +22,56 @@ are the change history.
 | Owner-only Telegram topics, uploads, and progress | Optional Telegram gateway |
 | Calendar, document reading, and transcript recall | Native Pi extensions |
 | Local model, search, scraping, and optional Gmail | Configured services and native tools |
-| Persistent gateway with a local Mac TUI and audio | Private terminal API over LAN/Tailscale |
-| Agent desktop on the homelab | Separate upstream Cua Spaces Linux container over MCP |
 
 ## Terminal build
 
-The **actual Pi Durable demo TUI** connects to the persistent gateway through its
-private API. Normal Mac launches never start a local agent or workspace. No web UI.
+The **actual Pi Durable demo TUI** connected to our personal harness.
+No web UI, HTTP server, or listening port.
 
 ```text
-Mac: Pi TUI + microphone + local ASR/TTS
-                 ↕ private API (LAN/Tailscale + bearer token)
-Umbrel: Sage gateway → your model server
-          ↕                  ↕
- Pi SQLite + workspace    configured tools / Telegram
-          ↕
- Cua Spaces Linux desktop (separate container, MCP)
+Your terminal / SSH / docker attach
+                 ↕
+     Pi's original durable TUI
+                 ↕
+   Pi Durable → your llama.cpp server
+       ↕
+SQLite · memory · responsibilities · skills
+       ↕
+   Optional Telegram gateway
 ```
 
-## Run the Mac client
+## Run locally
 
 Node 24.2+ is required. From this directory:
 
 ```sh
 npm ci
-npm run sage
-# Equivalent: npm start, npm run connect, or installed sage
+# Only if .env doesn't exist yet:
+cp .env.example .env
+npm start
 ```
 
-`sage`, `npm run sage`, `npm start`, and `npm run connect` all open the same gateway
-TUI. First launch asks for the gateway URL and token; later launches use the saved
-connection. The Mac keeps only client settings, terminal preferences, and optional
-voice assets under `~/.sage`. Chats, memory, workspace files, model access, and tools
-live on the gateway. A missing connection opens connection setup, never a local agent.
-Existing local `data/` is preserved but normal client startup does not open it.
+`npm start` opens the TUI in your terminal. It automatically reopens the existing
+SQLite conversation and resumes pending work. Existing memories and responsibilities
+from the first build are preserved in `data/`.
 
 ## Sage CLI
 
 Run `npm link` once in this checkout to make `sage` available on your PATH.
-Without linking, use `npm run sage -- <command>`. Client startup ignores the server
-`.env`. Explicit server and administration commands load this checkout's `.env` and
-resolve relative `DATA_DIR` paths from here, even when called elsewhere.
+Without linking, use `npm run sage -- <command>`. The launcher reads this checkout's
+`.env` and resolves relative `DATA_DIR` paths from here, even when called elsewhere.
 `sage` opens the existing Pi TUI with a compact Sage wordmark and model/workspace
 header that remains visible above saved chat history. The chat composer uses a
 shaded `>` prompt with native Pi editing and a model/context tray underneath.
-`sage setup` opens gateway connection setup. Model and conversation pickers inside
-chat use **↑/↓**, **Enter** to select, type to filter, and **Esc** to cancel. Type `/`
-to discover chat commands. The workspace path shown in the header is on the gateway.
+`sage setup` opens the matching setup menu. Use **↑/↓** to move,
+**Enter** to select, type to filter, and **Esc** to cancel. Model and conversation
+pickers inside chat use the same design; type `/` to discover chat commands.
 The muted palette and selection bands are adapted from
 [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent), with its MIT license
 and source reference preserved in [vendor/prime-design](vendor/prime-design/README.md).
 
 ```sh
-sage setup                 # Connect to the gateway
+sage setup                 # Model, MCP servers, or diagnostics
 sage model                 # Pick from the endpoint's advertised models
 sage model MODEL_ID --url http://localhost:8080/v1
 sage model reset           # Return to .env model defaults
@@ -85,14 +82,10 @@ sage mcp list
 sage mcp test NAME          # Connect/list tools; never calls a tool
 sage mcp remove NAME
 sage doctor                # Check config, data access, and model discovery
-sage gateway               # Persistent agent + private terminal API
-sage connect http://your-umbrel:8787   # Prompt for token, remember connection, open Mac TUI
-sage connect --forget       # Remove the saved client connection
 sage --help
 ```
 
-Server administration commands (`model`, `mcp`, `doctor`) are intended to run
-inside the gateway container. Their settings are saved atomically to `DATA_DIR/settings.json`; `.env`, conversations,
+Settings are saved atomically to `DATA_DIR/settings.json`; `.env`, conversations,
 and workspace instructions are preserved. CLI model settings override `LLM_MODEL`
 and `LLM_BASE_URL`. Explicit model IDs can be saved while offline; `sage doctor`
 checks whether the server advertises the selection. Restart Sage after a change.
@@ -166,8 +159,8 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | `/help`                   | Show the short help notice                                             |
 | Ctrl+C / Ctrl+D           | Exit; unfinished durable work resumes on next start                    |
 
-Closing the TUI disconnects the client. The gateway, text work, Telegram, and
-schedules keep running. Only `sage gateway` starts the persistent agent process.
+Closing the local TUI stops this process. To keep the agent alive while disconnected,
+use tmux on your server or detach from the running container as described below.
 
 `/new` starts a separate native Pi conversation without clearing or copying the
 previous transcript. Workspace files, memory, tools, and responsibilities stay
@@ -233,13 +226,13 @@ native bindings for [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx),
 [WebRTC VAD](https://github.com/daanzu/py-webrtcvad-wheels), and
 [Phonon](https://github.com/gradium-ai/xn-ptts/tree/v0.4.0). Both speech models stay
 loaded across turns. A small Swift helper handles only native audio I/O and echo
-cancellation; setup compiles it to `CLIENT_DATA_DIR/voice/audio`. There is no Swift app UI
-or agent logic, and no FFmpeg/FFplay requirement. Optional Python packages live in `CLIENT_DATA_DIR/voice/runtime`,
+cancellation; setup compiles it to `DATA_DIR/voice/audio`. There is no Swift app UI
+or agent logic, and no FFmpeg/FFplay requirement. Optional Python packages live in `DATA_DIR/voice/runtime`,
 separate from npm dependencies. Setup preserves an existing runtime and does not
 start the microphone. Recognition uses NVIDIA's **Parakeet Unified English 0.6B**,
 with the int8 ONNX export and four CPU threads. Setup downloads and verifies the
 public model once (478 MiB download, about 633 MiB installed), into
-`CLIENT_DATA_DIR/voice/parakeet-unified-en-0.6b`. No Hugging Face login is needed for ASR.
+`DATA_DIR/voice/parakeet-unified-en-0.6b`. No Hugging Face login is needed for ASR.
 This matches the model family available in Handy, using a different local runtime.
 The existing pause detector sends each completed utterance to Parakeet; recognition
 does not yet produce partial transcripts while you speak. TTS still streams.
@@ -258,21 +251,19 @@ the website into one folder, retaining their names:
 - `model.q8.gguf`
 - `default-voice.safetensors`
 
-For a downloaded model, save its folder once on the Mac:
+For a downloaded model, set `VOICE_TTS_MODEL` to that folder in `.env`, or for one run:
 
 ```sh
-sage voice model "/absolute/path/to/phonon-40m-en"
-npm run sage
+VOICE_TTS_MODEL="/absolute/path/to/phonon-40m-en" npm run voice:try
 ```
 
-The model path is saved in `~/.sage/settings.json` with your gateway connection.
-`VOICE_TTS_MODEL` still overrides it when supplied in the shell; the Mac client
-does not load the server `.env`. `voice:try` opens the same gateway TUI as `sage connect`; enter `/speak` to start
-local audio. It creates no local chat or workspace. Use `/new` first if you want a
-separate saved test conversation on the gateway. Hugging Face browser login and
-the Codex connector are separate from speech subprocess authentication; a local
-model folder requires no Hugging Face token at runtime. Models and credentials
-never belong in Git.
+`voice:try` opens a disposable chat with your configured LLM and starts voice mode.
+Telegram, shell, calendar, web services, and configured MCP servers are disabled.
+Its workspace/transcript is deleted on exit; the speech runtime and model cache
+are retained. This is the quickest way to judge latency without using your normal
+conversation or account tools. Hugging Face browser login and the Codex connector
+are separate from the speech subprocess's authentication; a local model folder
+requires no Hugging Face token at runtime. Models and credentials never belong in Git.
 
 In normal `npm start`, use `/speak` or `/speak on`. `/speak off`, Esc, typing a chat
 message, switching conversations, or exiting closes microphone/playback. Voice mode
@@ -318,107 +309,19 @@ request later fails/retries. Terminal errors keep the text transcript available.
 
 ## Homelab container
 
-The default container is now a persistent gateway, without a TTY. The Portainer
-stack in `compose.yaml` runs it alongside an isolated Cua Linux desktop. This
-targets the Intel/AMD Linux Umbrel host; no model server is bundled.
-
-| Location | Owns |
-| --- | --- |
-| Gateway | Pi loop, SQLite, chats, memory, workspace, schedules, Telegram, calendar/email, web tools, server MCP processes |
-| Mac client | Native Pi TUI, microphone, ASR, TTS, speaker, client theme/audio files |
-| Cua desktop | Its own browser/apps and persistent `/home/cua`; reached only by the gateway through MCP |
-| Model server | Existing configured OpenAI-compatible endpoint; can be a different machine |
-
-Build the image from the feature checkout, then import it into Portainer or build
-it directly on the Umbrel machine:
-
 ```sh
-docker buildx build --platform linux/amd64 --load -t sage-pi-gateway:local .
-docker save -o sage-pi-gateway-linux-amd64.tar sage-pi-gateway:local
-# On Umbrel, or use Portainer Images → Import:
-docker load -i sage-pi-gateway-linux-amd64.tar
+docker compose up --build -d
+docker attach --sig-proxy=false "$(docker compose ps -q agent)"
 ```
 
-In Portainer, create a Docker Standalone stack from `compose.yaml`. Set
-`GATEWAY_TOKEN` and `CUA_ENV_TOKEN` to **different** values generated with
-`openssl rand -hex 32`. Set `LLM_BASE_URL` to the model endpoint reachable from
-Umbrel, and `GATEWAY_BIND` to the Umbrel LAN/Tailscale address reachable by your Mac.
-The default bind is loopback. Optional service environment variables in the stack
-enable Telegram, search, calendar, and Gmail shell access. The stack is also runnable
-locally with `docker compose up -d` after setting those variables in `.env`.
+Detach with **Ctrl+P, then Ctrl+Q**. The container, scheduled tasks, and Telegram
+continue running. Attach again to the same TUI later. Connect over SSH when remote;
+no application network port is exposed. Stop with `docker compose down`.
 
-The existing logical `personal-pi` volume remains the gateway data volume; use the
-same Compose project/Portainer stack name to reuse an existing volume. Changing the
-project name creates different volumes. Back up any existing volume before moving
-it. No automatic data or credential migration from the Mac occurs.
-The gateway runs as the Node user; never open the same live SQLite database from a
-second Sage process. Manage server model/MCP settings using `sage model`/`sage mcp`
-inside the gateway container, then restart it. Those commands on the Mac configure
-the server process; changing files on the Mac does not configure the remote gateway.
-
-On the Mac, install the same repository revision and Node 24.2+, run `npm ci` and
-optionally `npm link`, then set only client connection configuration:
-
-```sh
-sage connect http://your-umbrel:8787
-# Enter the gateway token in the hidden prompt. It saves after authentication.
-# On later runs:
-sage connect
-# Plain `sage` also uses the saved connection.
-```
-
-The client does not load model/service settings or open a local agent database.
-It uses `CLIENT_DATA_DIR` (default `~/.sage`) for audio assets and terminal settings.
-The gateway URL and token are saved atomically in `~/.sage/settings.json` with
-owner-only file permissions (0600). The token is stored locally as plaintext;
-it is not printed or passed in command arguments. `sage connect --forget` removes
-the saved connection. Saved tokens are reused only for the same gateway origin. Existing
-`GATEWAY_URL`/`GATEWAY_TOKEN` environment variables remain optional overrides;
-environment-only connections are not saved unless you supply a URL explicitly.
-To reuse the existing Mac speech runtime, set `VOICE_DATA_DIR` to its existing
-absolute `data/voice` path; alternatively run voice setup with
-`npm run voice:setup`. Use `/speak` in the connected TUI.
-Only recognized text, spoken reply text, and playback/status events cross the API;
-microphone PCM, ASR, TTS, and device playback stay on the Mac. Disconnect stops voice
-and restores its temporary reasoning setting; it never auto-resumes the microphone.
-
-The API requires the shared bearer token, rejects browser origins, and has no
-frontend. Use it on your private LAN or Tailscale; HTTP itself does not encrypt
-traffic. Use HTTPS termination if the network is not trusted. Neither the model API
-key nor calendar/email credentials belong on the client. The Cua token is separate
-and stays on the server. There is one interactive TUI connection at a time; Telegram
-and background work remain independent. Reconnect receives current committed Pi
-state, and commands with uncertain delivery are never replayed automatically.
-Slow clients are disconnected rather than buffering indefinitely. Views currently
-use full snapshots; very long transcripts can use substantial bandwidth.
-Files and shell commands refer to the gateway filesystem; this does not add Mac
-file uploads or arbitrary execution on the Mac.
-
-Sage's tool instructions prefer direct APIs and configured integrations, including
-calendar tools, before computer use. Cua is for tasks requiring visual interaction,
-tasks direct tools cannot complete, or explicit requests to use the desktop. This
-guidance also applies to existing workspaces without replacing their instructions.
-Updating the gateway image is required to apply it to a deployed gateway.
-
-The pinned upstream Cua desktop exposes `/mcp` only on the stack network; the
-gateway registers it as `mcp__desktop__...`. It has its own data volume, needs about
-4 GB of available RAM, and gets no host directories or Docker socket. Sage controls
-that desktop rather than your Mac. Image/screenshots require a vision-capable model.
-The image's built-in viewer is not published by this stack. The desktop's source
-is under FSL-1.1-MIT; the Driver is MIT. See the upstream
-[container connection guide](https://cua.ai/docs/cua-sdk/guides/spacesd) and
-[licensing](https://github.com/trycua/cua#licensing).
-
-To stop the stack, use Portainer or `docker compose down`; retain the volumes.
-`sage gateway`, `npm run gateway`, and `npm run daemon` explicitly start the server
-with its private API. `--headless` is retained as a server alias. All ordinary launch
-commands are clients, including when no connection has been saved.
-
-`npm run test:docker` is an opt-in smoke test after building the image. It starts
-fresh AMD64 containers, disposable volumes, and a mock model; verifies a real Cua
-screenshot through Pi, authentication, disconnect, restart persistence and graceful
-shutdown; then removes its resources. It does not use `.env`, real Telegram, or
-external accounts. It is separate from `npm test` and does not run in CI.
+The container's TTY and stdin stay open. Its named volume `personal-pi` persists data.
+For headless operation instead of the TUI, set the Compose command to
+`["node", "src/cli.ts", "--headless"]`. Locally, use `npm run daemon`.
+Docker execution still needs testing on a machine with its daemon running.
 
 ## What is native Pi
 
@@ -688,8 +591,6 @@ headless server; follow the upstream headless instructions and keep credentials 
 ## Small code map
 
 - `src/cli.ts`: TUI/headless entry, Telegram, shutdown.
-- `src/gateway.ts`: Authenticated private API over Pi's existing TUI adapter.
-- `src/gateway-client.ts`: Local TUI connection and Mac audio transport.
 - `src/tui-adapter.ts`: Connect our existing harness to the upstream TUI's view/controller.
 - `vendor/pi-durable-tui/tui.ts`: Actual upstream demo renderer, with provenance and MIT license.
 - `src/assistant.ts`: Assemble native Pi; load extensions, instructions, and skills.
