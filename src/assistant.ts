@@ -347,13 +347,6 @@ export async function openAssistant(
         section("instructions_file", () =>
           readFile(join(workspace, "AGENTS.md"), "utf8"),
         ),
-        section("tool_selection", () =>
-          "Prefer direct text tools, APIs, and configured service integrations over computer use. " +
-          "For calendar requests, use calendar_read/calendar_write and the calendar skill when available. " +
-          "Use Cua or a browser/desktop UI only when the task requires visual interaction, direct tools cannot complete it, " +
-          "or the user explicitly requests computer use. Do not open a desktop just to inspect information available through a direct tool. " +
-          "If an integration is missing credentials or fails, explain the limitation; computer use must stay within the user's authorization.",
-        ),
         section("telegram_reply_style", async ({ conversationId }, callContext) =>
           await isTelegramReply(conversationId, callContext)
             ? readFile(join(workspace, "TELEGRAM.md"), "utf8") : undefined),

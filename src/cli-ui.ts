@@ -296,14 +296,8 @@ export async function selectOption(header: SageHeader, title: string, items: Sel
   return promptScreen(header, picker, result);
 }
 
-export class SageSecretInput extends Input {
-  override render(width: number): string[] {
-    return [truncateToWidth("> " + "•".repeat(Math.min(this.getValue().length, Math.max(0, width - 2))), Math.max(1, width))];
-  }
-}
-
-export async function textPrompt(header: SageHeader, title: string, secret = false) {
-  const input = secret ? new SageSecretInput({ prompt: "> " }) : new Input({ prompt: "> " });
+export async function textPrompt(header: SageHeader, title: string) {
+  const input = new Input({ prompt: "> " });
   const field: Component & Focusable = {
     get focused() { return input.focused; },
     set focused(value: boolean) { input.focused = value; },

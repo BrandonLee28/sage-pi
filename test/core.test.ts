@@ -363,10 +363,6 @@ test("USER.md is seeded, refreshes across conversations, and preserves edits on 
     await writeFile(join(assistant.workspace, "AGENTS.md"), "Keep replies short.");
     assert.equal((await (await assistant.submit("Hello.")).wait(context)).status, "done");
     assert.ok((await prompt()).includes(original));
-    assert.match(await prompt(), /Prefer direct text tools, APIs, and configured service integrations over computer use/);
-    assert.match(await prompt(), /For calendar requests, use calendar_read\/calendar_write/);
-    assert.match(await prompt(), /Use Cua or a browser\/desktop UI only when/);
-    assert.equal(await readFile(join(assistant.workspace, "AGENTS.md"), "utf8"), "Keep replies short.");
     assert.ok((await prompt()).includes("Profile file: USER.md (shared across conversations). Update this file only when the user asks."));
 
     const updated = "# User\nPreferred name: Test User.\nUse short numbered steps.";

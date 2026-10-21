@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { httpUrl, readSettings, type McpServer } from "./settings.ts";
+import { readSettings } from "./settings.ts";
 
 function integer(
   name: string,
@@ -16,11 +16,6 @@ function integer(
 export function readConfig() {
   const dataDir = resolve(process.env.DATA_DIR ?? "./data");
   const settings = readSettings(dataDir);
-  const mcpServers: Record<string, McpServer> = { ...settings.mcpServers };
-  if (process.env.CUA_MCP_URL) {
-    if (mcpServers.desktop) throw new Error("Configure desktop through either CUA_MCP_URL or sage mcp, not both.");
-    mcpServers.desktop = { url: httpUrl(process.env.CUA_MCP_URL), bearerTokenEnv: "CUA_ENV_TOKEN" };
-  }
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
   const telegramChat = process.env.TELEGRAM_CHAT_ID ?? "";
   if (Boolean(telegramToken) !== Boolean(telegramChat))
@@ -39,7 +34,7 @@ export function readConfig() {
     maxTokens,
     dataDir,
     modelRevision: settings.model?.revision,
-    mcpServers,
+    mcpServers: settings.mcpServers ?? {},
     baseUrl: (
       settings.model?.baseUrl ?? process.env.LLM_BASE_URL ?? "http://example.invalid:8080/v1"
     ).replace(/\/$/, ""),

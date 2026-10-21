@@ -1,49 +1,14 @@
 services:
-  gateway:
-    image: sage-pi-gateway:local
+  agent:
+    build: .
     restart: unless-stopped
     init: true
+    stdin_open: true
+    tty: true
+    env_file: .env
     environment:
       DATA_DIR: /app/data
-      GATEWAY_HOST: 0.0.0.0
-      GATEWAY_PORT: 8787
-      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?Set a random GATEWAY_TOKEN of at least 32 characters}
-      LLM_BASE_URL: ${LLM_BASE_URL:?Set your model endpoint reachable from Umbrel}
-      LLM_MODEL: ${LLM_MODEL:-example-model}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_CONTEXT: ${LLM_CONTEXT:-65536}
-      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-8192}
-      TZ: ${TZ:-America/New_York}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
-      SEARXNG_URL: ${SEARXNG_URL:-}
-      FIRECRAWL_URL: ${FIRECRAWL_URL:-}
-      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
-      LIGHTPANDA_URL: ${LIGHTPANDA_URL:-}
-      APPLE_ID: ${APPLE_ID:-}
-      APPLE_APP_PASSWORD: ${APPLE_APP_PASSWORD:-}
-      APPLE_CALENDAR_URL: ${APPLE_CALENDAR_URL:-}
-      ENABLE_SHELL: ${ENABLE_SHELL:-true}
-      CUA_MCP_URL: http://desktop:3211/mcp
-      CUA_ENV_TOKEN: ${CUA_ENV_TOKEN:?Set a separate random CUA_ENV_TOKEN}
-    ports:
-      - "${GATEWAY_BIND:-127.0.0.1}:8787:8787"
     volumes:
       - personal-pi:/app/data
-    depends_on:
-      desktop:
-        condition: service_healthy
-  desktop:
-    # Upstream Cua Spaces Linux image; pinned multi-architecture digest, 2026-10-21.
-    image: ghcr.io/trycua/linux:24.04-slim@sha256:5f45887ef1db1c5dd35dabf5482bfad58986f0fa37115c7ad52d14f7d1452291
-    restart: unless-stopped
-    shm_size: 512mb
-    environment:
-      CUA_ENV_TOKEN: ${CUA_ENV_TOKEN:?Set a separate random CUA_ENV_TOKEN}
-      DO_NOT_TRACK: "1"
-    volumes:
-      - desktop-home:/home/cua
-    # No host ports or Docker socket. Sage reaches /mcp on the stack's network.
 volumes:
   personal-pi:
-  desktop-home:

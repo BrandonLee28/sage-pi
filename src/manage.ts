@@ -7,8 +7,8 @@ import { httpUrl, readSettings, saveSettings, validateServer, type McpServer } f
 import { connectMcp } from "../extensions/mcp.ts";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { SageHeader, registerSageTheme, selectOption, textPrompt } from "./cli-ui.ts";
-const help = `sage                         Open the gateway TUI (first run asks for connection)
-sage setup                   Configure/connect to the gateway
+const help = `sage                         Open Pi's conversation TUI
+sage setup                   Open the setup menu
 sage model [ID] [--url URL]   Choose a model / OpenAI-compatible endpoint
 sage model reset             Use .env model defaults again
 sage mcp                     Manage MCP servers interactively
@@ -19,14 +19,9 @@ sage mcp add NAME --url URL [--token-env ENV_NAME]
 sage mcp remove NAME         Remove a server
 sage mcp test NAME           Connect and list tools without calling them
 sage doctor                  Check local setup and model discovery
-sage --headless              Alias for sage gateway (server only)
-sage gateway                 Run the persistent gateway (LAN/Tailscale API)
-sage connect [URL]           Connect and remember a gateway; prompt for token once
-sage connect --forget        Remove the saved client connection
-sage voice model PATH        Remember the Mac speech model folder (or hf:// URL)
+sage --headless              Run in the background (no TUI)
 
 Settings: DATA_DIR/settings.json. Secrets stay in .env/environment.
-Client connection/token: CLIENT_DATA_DIR/settings.json (default ~/.sage), owner-only.
 Restart Sage after changes; running conversations are updated on restart.`;
 
 async function advertisedModels(baseUrl: string, apiKey: string) {
@@ -61,6 +56,15 @@ export async function manage(args: string[]) {
     const settings = readSettings(config.dataDir);
     header.details = { model: config.modelId, cwd: join(config.dataDir, "workspace"), section: "Setup" };
     let [command, action, ...rest] = positionals;
+    if (command === "setup") {
+      const choice = await selectOption(header, "What would you like to configure?", [
+        { value: "model", label: "Model", description: "Choose the model and endpoint" },
+        { value: "mcp", label: "MCP servers", description: "Manage tool connections" },
+        { value: "doctor", label: "Diagnostics", description: "Check your local setup" },
+      ]);
+      if (choice === undefined) return;
+      command = choice;
+    }
     if (command === "model") {
       if (rest.length) throw new Error("Usage: sage model [ID] [--url URL]");
       if (action === "reset") {
