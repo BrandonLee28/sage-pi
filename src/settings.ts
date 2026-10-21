@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+
+export const clientDataDir = () => process.env.CLIENT_DATA_DIR ?? join(homedir(), ".sage");
 
 export type McpServer = { command: string; args: string[]; env?: string[] } | { url: string; bearerTokenEnv?: string };
 export type Settings = {

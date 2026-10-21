@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -11,6 +11,41 @@ import { readSettings, saveSettings } from "../src/settings.ts";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+
+test("client launch ignores server dotenv configuration and all normal npm commands use the same launcher", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sage-client-launch-"));
+  try {
+    const launcher = await readFile(new URL("../bin/sage.mjs", import.meta.url), "utf8");
+    await mkdir(join(directory, "bin")); await mkdir(join(directory, "src"));
+    await writeFile(join(directory, "bin", "sage.mjs"), launcher);
+    await writeFile(join(directory, "src", "cli.ts"), 'console.log(process.env.SAGE_TEST_SERVER_ENV ?? "not-loaded");');
+    await writeFile(join(directory, ".env"), "SAGE_TEST_SERVER_ENV=server-only\n");
+    const env = { ...process.env }; delete env.SAGE_TEST_SERVER_ENV;
+    for (const args of [[], ["connect"], ["setup"]]) {
+      assert.equal((await exec(process.execPath, [join(directory, "bin", "sage.mjs"), ...args], { env })).stdout.trim(), "not-loaded");
+    }
+    assert.equal((await exec(process.execPath, [join(directory, "bin", "sage.mjs"), "gateway"], { env })).stdout.trim(), "server-only");
+    const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+    for (const name of ["sage", "start", "dev"]) assert.equal(scripts[name], "node bin/sage.mjs");
+    assert.equal(scripts.connect, "node bin/sage.mjs connect");
+    assert.equal(scripts["voice:try"], scripts.connect);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("unconfigured client startup never creates a local workspace or database", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sage-client-empty-"));
+  try {
+    const server = join(directory, "server"), client = join(directory, "client");
+    for (const args of [[], ["connect"], ["setup"]]) {
+      await assert.rejects(exec(process.execPath, [cli, ...args], { env: {
+        ...process.env, DATA_DIR: server, CLIENT_DATA_DIR: client, GATEWAY_URL: "", GATEWAY_TOKEN: "",
+        TELEGRAM_BOT_TOKEN: "invalid-unpaired-server-setting", TELEGRAM_CHAT_ID: "",
+      } }), /needs a local terminal/);
+    }
+    await assert.rejects(access(server), { code: "ENOENT" });
+    await assert.rejects(access(client), { code: "ENOENT" });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 test("CLI manages models and MCP without opening a conversation or running a server", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-cli-"));

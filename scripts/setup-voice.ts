@@ -2,10 +2,10 @@ import { spawnSync } from "node:child_process";
 import { access, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readConfig } from "../src/config.ts";
+import { clientDataDir } from "../src/settings.ts";
 
 if (process.platform !== "darwin") throw new Error("The local voice prototype currently supports macOS.");
-const assets = process.env.VOICE_DATA_DIR ?? join(readConfig().dataDir, "voice");
+const assets = process.env.VOICE_DATA_DIR ?? join(clientDataDir(), "voice");
 const directory = join(assets, "runtime");
 await mkdir(directory, { recursive: true });
 const exists = await access(join(directory, "bin", "python")).then(() => true, () => false);

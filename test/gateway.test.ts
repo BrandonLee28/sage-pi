@@ -47,16 +47,17 @@ process.stdout.isTTY = true;
 process.stdout.columns = 80;
 process.stdout.rows = 24;
 `);
-  const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const cli = fileURLToPath(new URL("../bin/sage.mjs", import.meta.url));
   const run = (args: string[], prompt: boolean, overrideToken = "") => new Promise<string>((resolve, reject) => {
     const child = spawn(process.execPath, ["--import", preload, cli, ...args], { env: {
       ...process.env, CLIENT_DATA_DIR: directory, DATA_DIR: join(f.directory, "unused-server"),
       GATEWAY_URL: "", GATEWAY_TOKEN: overrideToken, TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "",
     } });
-    let output = "", errors = "", sent = false, exited = false;
+    let output = "", errors = "", sent = false, urlSent = false, exited = false;
     const timeout = setTimeout(() => { child.kill(); reject(new Error("CLI connection test timed out")); }, 10000);
     child.stdout.on("data", (data) => {
       output += data;
+      if (prompt && !urlSent && /Gateway URL/.test(output)) { urlSent = true; child.stdin.write(f.url + "\r"); }
       if (prompt && !sent && /Gateway token/.test(output)) { sent = true; child.stdin.write(token + "\r"); }
       if (!exited && /Ask Sage anything/.test(output)) { exited = true; child.stdin.write("\x04"); }
     });
@@ -69,7 +70,7 @@ process.stdout.rows = 24;
     });
   });
   try {
-    const first = await run(["connect", f.url], true);
+    const first = await run([], true);
     assert.doesNotMatch(first, new RegExp(token));
     assert.deepEqual(readSettings(directory).gateway, { url: f.url, token });
     assert.equal((await stat(join(directory, "settings.json"))).mode & 0o777, 0o600);
@@ -79,6 +80,8 @@ process.stdout.rows = 24;
     assert.deepEqual(readSettings(directory).gateway, { url: f.url, token });
     assert.equal(f.faux.state.callCount, 0);
     await assert.rejects(access(join(directory, "agent.sqlite")), { code: "ENOENT" });
+    await assert.rejects(access(join(directory, "workspace")), { code: "ENOENT" });
+    await assert.rejects(access(join(f.directory, "unused-server")), { code: "ENOENT" });
     const before = readSettings(directory);
     await saveSettings(directory, { ...before, mcpServers: {} });
     await run(["connect", "--forget"], false);

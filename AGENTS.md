@@ -8,6 +8,8 @@ declarations before changing API usage. GitHub main may be newer than npm.
 Use plain TypeScript on Node 24.2+ and the upstream Pi Durable demo TUI.
 The user explicitly does not want a web UI. The private gateway API serves the
 native Mac TUI; do not add a web frontend or replace the Pi generation loop.
+Normal launches are gateway clients. Never fall back to a local agent, database,
+or workspace. Only an explicit gateway/server command may open agent storage.
 Add dependencies only for a concrete missing capability. No new abstraction layer
 for one implementation. Keep code readable to a human editing a single feature.
 
