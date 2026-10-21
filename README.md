@@ -262,6 +262,20 @@ temporarily sets the selected conversation's native thinking level to Off; its p
 level is restored on exit or restart, unless you chose another level yourself.
 Model calls and context still use the same backend and single inference stream.
 
+`data/workspace/VOICE.md` supplies the active conversation's spoken style and scope.
+It asks for natural wording without emoji/kaomoji or decorative punctuation, short
+answers, current tool results for live facts, and quick lookups/simple actions.
+Long research or multistep work should move to text. These are model instructions,
+not hard tool limits. Edit that file to tune the behavior; it refreshes on the next
+model turn. The template in `instructions/VOICE.md` seeds new workspaces; startup
+preserves existing runtime edits. Text-only conversations retain their normal style.
+The native voice extension omits `<text_style>...</text_style>` blocks from the
+rendered SOUL.md only for the active voice conversation, retaining shared values.
+Put visual-only personality cues inside that block to avoid contradictory prompts.
+Calendar reads include `localStart`, `localEnd`, and `localTimezone` alongside the
+source timestamps, so spoken answers can use local times without model arithmetic.
+All-day dates remain dates, including their exclusive end date.
+
 The orb reports time to the first PCM chunk since detected end of speech,
 pause + ASR time, and model time to first text.
 **First PCM is not measured speaker latency**: sentence buffering and playback

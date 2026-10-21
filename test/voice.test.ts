@@ -132,6 +132,43 @@ test("voice keeps native tools and does not speak their arguments or outputs", a
   } finally { await f.close(); }
 });
 
+test("voice selects spoken instructions while preserving shared values, edits, and text conversations", async () => {
+  const f = await fixture();
+  const soul = "Shared warmth and trust.\n<text_style>VISUAL_PERSONALITY_ONLY</text_style>\nKeep the user's chosen goals.";
+  await writeFile(join(f.assistant.workspace, "SOUL.md"), soul);
+  const adapter = await tuiAdapter(f.assistant, f.config, () => ({
+    start: async () => {}, stop() {}, speak() {}, finish() {}, interrupt() {},
+  }));
+  const promptFor = async (conversation = f.assistant.root) => {
+    let prompt = "";
+    f.faux.setResponses([async (input) => {
+      prompt = getCurrentSystemPrompt(input.messages);
+      return fauxAssistantMessage("Hello.");
+    }]);
+    await (await f.assistant.submit("Hello.", undefined, false, true, conversation)).wait(context);
+    return prompt;
+  };
+  try {
+    await adapter.controller.submit("/speak", "steer");
+    const spoken = await promptFor();
+    assert.match(spoken, /Shared warmth and trust/);
+    assert.match(spoken, /Keep the user's chosen goals/);
+    assert.match(spoken, /quick live exchange/);
+    assert.doesNotMatch(spoken, /VISUAL_PERSONALITY_ONLY/);
+    const other = await f.assistant.createSession(f.assistant.root.id);
+    const text = await promptFor(other);
+    assert.match(text, /VISUAL_PERSONALITY_ONLY/);
+    assert.doesNotMatch(text, /quick live exchange/);
+    await writeFile(join(f.assistant.workspace, "VOICE.md"), "SPOKEN_LIVE_EDIT");
+    assert.match(await promptFor(), /SPOKEN_LIVE_EDIT/);
+    await adapter.controller.submit("/speak off", "steer");
+    const restored = await promptFor();
+    assert.match(restored, /VISUAL_PERSONALITY_ONLY/);
+    assert.doesNotMatch(restored, /SPOKEN_LIVE_EDIT/);
+    assert.equal(await readFile(join(f.assistant.workspace, "SOUL.md"), "utf8"), soul);
+  } finally { await adapter.dispose(); await f.close(); }
+});
+
 test("hands-free TUI voice interrupts native work, ignores stale transcripts, and restores thinking", async () => {
   const f = await fixture();
   let emit!: (event: VoiceEvent) => void;
