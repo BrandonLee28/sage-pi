@@ -38,6 +38,7 @@ import { personalExtension, personalState } from "./personal.ts";
 import { webExtension } from "./web.ts";
 import { calendarExtension } from "../extensions/calendar.ts";
 import { routinesExtension } from "../extensions/routines.ts";
+import { heartbeatExtension, Heartbeat, HEARTBEAT_SILENT } from "../extensions/heartbeat.ts";
 import { connectMcp } from "../extensions/mcp.ts";
 import type { Config } from "./config.ts";
 
@@ -99,6 +100,7 @@ export async function openAssistant(
     models?: Models;
     model?: { provider: string; modelId: string };
     sendTelegram?: (text: string, threadId?: number) => Promise<void>;
+    heartbeatTiming?: Parameters<typeof heartbeatExtension>[1];
   } = {},
 ) {
   const workspace = join(config.dataDir, "workspace");
@@ -135,7 +137,7 @@ export async function openAssistant(
 
   // Delivery is a native durable task, including its wait and retry checkpoints.
   const Delivery = defineTask<
-    { submissionId: SubmissionId; threadId?: number },
+    { submissionId: SubmissionId; threadId?: number; heartbeatRevision?: number },
     | { phase: "answer" }
     | {
         phase: "send";
@@ -158,6 +160,10 @@ export async function openAssistant(
         if (!submission)
           throw new Error("Missing submission for Telegram delivery");
         const settled = await submission.wait(callContext);
+        if (task.input.heartbeatRevision !== undefined && settled.status !== "done") {
+          await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: null } }), callContext);
+          return;
+        }
         let text =
           "The agent could not complete that request. Check the terminal for details.";
         if (settled.status === "done" && settled.type === "input") {
@@ -175,6 +181,10 @@ export async function openAssistant(
                 : [],
             )
             .join("\n");
+          if (task.input.heartbeatRevision !== undefined && (!text.trim() || text.trim() === HEARTBEAT_SILENT)) {
+            await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: null } }), callContext);
+            return;
+          }
           if (!text.trim()) {
             const limited = entry?.model?.some((message) => message.role === "assistant" && message.stopReason === "length");
             text = limited
@@ -222,6 +232,11 @@ export async function openAssistant(
         }
         try {
           await runtime.sleep(saved.retryAt, callContext);
+          if (task.input.heartbeatRevision !== undefined &&
+              (await runtime.snapshot(Heartbeat, callContext))?.revision !== task.input.heartbeatRevision) {
+            await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: null } }), callContext);
+            return;
+          }
           // ponytail: Telegram has no idempotency key; a crash after send can duplicate the last chunk.
           const chunk = saved.text.slice(saved.offset, saved.offset + 3500);
           await options.sendTelegram(chunk, task.input.threadId);
@@ -264,7 +279,7 @@ export async function openAssistant(
       ),
   });
 
-  async function submit(
+  async function submitInput(
     content: string,
     requestId: string = randomUUID(),
     notify = false,
@@ -304,12 +319,38 @@ export async function openAssistant(
     return submission;
   }
 
+  const heartbeat = heartbeatExtension({
+    workspace, enabled: Boolean(options.sendTelegram), harness: () => harness,
+    submit: async (requestId, conversationId) => {
+      const conversation = (await harness.conversation(conversationId, context))!;
+      return conversation.submit({
+        type: "input", requestId,
+        entry: { kind: "personal.scheduled", data: { requestId, telegram: true } },
+        content: "Heartbeat check. Read HEARTBEAT.md and relevant workspace context/skills. " +
+        "Review approved responsibilities, save useful progress and feedback, and continue authorized unfinished work. " +
+        "Use clock for the current local time. Check evidence before acting or nudging; do not assume lack of a reply means no progress. " +
+        "If a Telegram update is warranted, make your final answer the concise message for the owner. " +
+        `Otherwise reply with exactly ${HEARTBEAT_SILENT}. Do not narrate a silent check or send a status report.`,
+      }, context);
+    },
+    deliver: async (submissionId, conversationId, revision) => {
+      const conversation = (await harness.conversation(conversationId, context))!;
+      await conversation.commit(async (tx) => {
+        const index = await tx.doc(DeliveryIndex);
+        if (!index.tasks[String(submissionId)]) index.tasks[String(submissionId)] = await tx.createTask(
+          Delivery, { submissionId, heartbeatRevision: revision }, { ownership: { kind: "conversation" }, background: true },
+        );
+      }, context);
+    },
+  }, options.heartbeatTiming);
+  const submit = (...args: Parameters<typeof submitInput>) => heartbeat.humanInput(() => submitInput(...args));
+
   const personal = personalExtension({
     timezone: config.timezone,
     submit: async (content, requestId, notify, conversationId) => {
       const conversation = await harness.conversation(conversationId, context);
       if (!conversation) throw new Error("Missing scheduled conversation");
-      return submit(content, requestId, notify, false, conversation);
+      return submitInput(content, requestId, notify, false, conversation);
     },
   });
   const images = await createNodePhotonImages();
@@ -322,6 +363,7 @@ export async function openAssistant(
         }),
   );
   registry.install(personal.extension);
+  registry.install(heartbeat.extension);
   registry.install(defineExtension({ name: "delivery", tasks: [Delivery] }));
   registry.install(
     defineExtension({
@@ -399,7 +441,7 @@ export async function openAssistant(
     submit: async (content, requestId, conversationId) => {
       const conversation = await harness.conversation(conversationId, context);
       if (!conversation) throw new Error("Missing routine conversation");
-      return submit(content, requestId, true, false, conversation);
+      return submitInput(content, requestId, true, false, conversation);
     },
   }));
   const extensionDir = new URL("../extensions/", import.meta.url);
@@ -445,10 +487,12 @@ export async function openAssistant(
     context,
   );
   root = await harness.root(context);
+  await heartbeat.start();
   await root.commit(async (tx) => { await tx.doc(TelegramTopics); await tx.doc(TuiSessions); }, context);
   const topics = await harness.snapshot(TelegramTopics, context);
   const sessions = await harness.snapshot(TuiSessions, context);
-  for (const id of [root.id, ...Object.values(topics?.conversations ?? {}), ...(sessions?.conversations ?? [])]) {
+  const heartbeatState = await harness.snapshot(Heartbeat, context);
+  for (const id of [root.id, ...Object.values(topics?.conversations ?? {}), ...(sessions?.conversations ?? []), heartbeatState!.conversationId!]) {
     const conversation = await harness.conversation(id, context);
     if (!conversation) throw new Error(`Missing conversation ${id}`);
     const saved = await harness.snapshot(AgentDoc, id, context);
@@ -488,6 +532,7 @@ export async function openAssistant(
     harness,
     root,
     submit,
+    noteHumanActivity: () => heartbeat.humanInput(async () => {}),
     async createSession(from: ConversationId) {
       const saved = await harness.snapshot(AgentDoc, from, context);
       if (!saved?.model) throw new Error("The current session has no configured model.");
