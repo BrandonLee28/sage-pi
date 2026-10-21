@@ -54,6 +54,17 @@ test("a reopened long chat keeps Sage's header and styled native editor visible"
         assert.ok(screen.every((line) => visibleWidth(line) <= columns));
       }
       const editor = view.ui.getFocusedComponent();
+      for (const dimensions of [[80, 24], [40, 18], [80, 24]]) {
+        [columns, rows] = dimensions as [number, number];
+        view.apply({ ...adapter.source.current(), voice: { phase: "listening", level: .5 } });
+        view.ui.renderNow(true);
+        const screen = view.ui.getScreenLines().map(stripTerminalSequences);
+        assert.match(screen.join('\n'), /voice.*Listening/);
+        assert.match(screen.join('\n'), />\s+Ask Sage anything/);
+        assert.match(screen.join('\n'), /sage/);
+        assert.ok(screen.every((line) => visibleWidth(line) <= columns));
+      }
+      view.apply(adapter.source.current());
       assert.ok(editor instanceof SageEditor);
       editor.handleInput("/");
       await new Promise((resolve) => setImmediate(resolve));

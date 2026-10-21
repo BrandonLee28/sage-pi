@@ -56,7 +56,7 @@ if (args.length && !(args.length === 1 && args[0] === "--headless")) {
     try {
       await runDurableTui(adapter.source, adapter.controller, settings);
     } finally {
-      adapter.dispose();
+      await adapter.dispose();
       await close();
     }
   }
