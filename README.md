@@ -312,8 +312,11 @@ not yet been admitted to Pi is discarded to avoid a late, out-of-order request.
 Raw microphone/audio buffers stay in memory; normal sessions save transcribed text
 and generated answers. Microphone sessions never auto-resume after a crash. Pi's
 abort waits for tools to respond and cannot undo effects already completed. Very
-long speech is split into bounded utterances, and excessive queued output stops
-voice with an error. Streaming words already heard cannot be taken back if a model
+long speech is split into bounded utterances. Native playback acknowledgments keep
+synthesis at most five seconds ahead of the speaker; longer replies wait for playback
+instead of switching voice off. Interruption clears those pending audio credits.
+After upgrading, run `npm run voice:setup` once to rebuild the native audio helper.
+Streaming words already heard cannot be taken back if a model
 request later fails/retries. Terminal errors keep the text transcript available.
 
 ## Homelab container

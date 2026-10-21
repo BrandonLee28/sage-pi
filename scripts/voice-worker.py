@@ -109,10 +109,14 @@ def main():
         joiner=str(model / required[2]), tokens=str(model / required[3]),
         num_threads=4, sample_rate=16000, feature_dim=128,
         model_type="nemo_transducer", decoding_method="greedy_search", provider="cpu")
-    speech_jobs, recognition_jobs = queue.Queue(maxsize=32), queue.Queue(maxsize=1)
+    # Queue text, not synthesized audio. Playback credits bound PCM to five seconds.
+    speech_jobs, recognition_jobs = queue.Queue(), queue.Queue(maxsize=1)
     epoch = 0
+    playback = threading.Condition()
+    queued_frames = 0
 
     def synthesize():
+        nonlocal queued_frames
         while True:
             job = speech_jobs.get()
             if job["epoch"] != epoch:
@@ -126,8 +130,15 @@ def main():
                     for pcm in audio:
                         if job["epoch"] != epoch:
                             break
-                        send("audio", epoch=job["epoch"], sampleRate=audio.sample_rate,
-                             pcm=base64.b64encode(pcm.astype("<f4").tobytes()).decode())
+                        for offset in range(0, len(pcm), 24000):
+                            chunk = pcm[offset:offset + 24000]
+                            with playback:
+                                playback.wait_for(lambda: job["epoch"] != epoch or queued_frames + len(chunk) <= 24000 * 5)
+                                if job["epoch"] != epoch:
+                                    break
+                                queued_frames += len(chunk)
+                            send("audio", epoch=job["epoch"], sampleRate=audio.sample_rate,
+                                 pcm=base64.b64encode(chunk.astype("<f4").tobytes()).decode())
             except Exception as error:
                 send("error", message=f"Speech generation failed: {error}")
 
@@ -166,17 +177,22 @@ def main():
         if job["type"] == "mic":
             detector.feed(base64.b64decode(job["pcm"], validate=True))
         elif job["type"] == "cancel":
-            epoch = job["epoch"]
+            with playback:
+                epoch = job["epoch"]
+                queued_frames = 0
+                playback.notify_all()
             try:
                 while True:
                     speech_jobs.get_nowait()
             except queue.Empty:
                 pass
+        elif job["type"] == "played":
+            with playback:
+                if job["epoch"] == epoch:
+                    queued_frames = max(0, queued_frames - job["frames"])
+                    playback.notify_all()
         elif job["type"] in ("speak", "finish"):
-            try:
-                speech_jobs.put_nowait(job)
-            except queue.Full:
-                send("error", message="Voice speech queue is full. Ask for a shorter spoken reply.")
+            speech_jobs.put_nowait(job)
 
 
 if __name__ == "__main__":
