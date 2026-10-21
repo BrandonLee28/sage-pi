@@ -269,6 +269,36 @@ assert module.SpeechDetector(Vad(), lambda *event: None).threshold_db is None
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("Parakeet decodes each complete utterance in a fresh 16 kHz stream", (t) => {
+  const result = spawnSync("python3", ["-c", `
+import importlib.util
+from types import SimpleNamespace
+spec = importlib.util.spec_from_file_location("voice_worker", "scripts/voice-worker.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+streams = []
+class Stream:
+    def accept_waveform(self, rate, samples):
+        assert rate == 16000
+        self.samples = samples
+class Recognizer:
+    def create_stream(self):
+        stream = Stream()
+        streams.append(stream)
+        return stream
+    def decode_stream(self, stream):
+        assert stream is streams[-1]
+        stream.result = SimpleNamespace(text=" Hello Sage. " if any(stream.samples) else " ")
+asr = Recognizer()
+assert module.transcribe(asr, [0.25, -0.25]) == "Hello Sage."
+assert module.transcribe(asr, [0.0, 0.0]) == ""
+assert len(streams) == 2 and streams[0] is not streams[1]
+assert streams[0].samples == [0.25, -0.25] and streams[1].samples == [0.0, 0.0]
+`], { cwd: new URL("..", import.meta.url), encoding: "utf8", env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") return t.skip("Optional Python voice runtime is not installed");
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("failed voice startup restores thinking and leaves no active microphone session", async () => {
   const f = await fixture();
   let stopped = false;

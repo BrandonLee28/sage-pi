@@ -77,7 +77,7 @@ export function localVoice(config: Config, events: (event: VoiceEvent) => void) 
       if (closed) return;
       const args = ["-u", fileURLToPath(new URL("../scripts/voice-worker.py", import.meta.url)),
         "--tts-model", process.env.VOICE_TTS_MODEL ?? "hf://gradium/phonon-40m-en",
-        "--asr-model", process.env.VOICE_ASR_MODEL ?? "base.en", "--cache-dir", directory,
+        "--asr-model", process.env.VOICE_ASR_MODEL ?? join(directory, "parakeet-unified-en-0.6b"), "--cache-dir", directory,
         "--silence-ms", String(silence), "--voice", process.env.VOICE_TTS_VOICE ?? ""];
       worker = launch(python, args, true);
       const lines = createInterface({ input: worker.stdout });

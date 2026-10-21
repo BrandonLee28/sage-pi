@@ -222,15 +222,24 @@ npm run voice:setup
 ```
 
 The primary application remains TypeScript. A small stdio subprocess uses pinned
-native bindings for [whisper.cpp](https://github.com/absadiki/pywhispercpp),
+native bindings for [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx),
 [WebRTC VAD](https://github.com/daanzu/py-webrtcvad-wheels), and
 [Phonon](https://github.com/gradium-ai/xn-ptts/tree/v0.4.0). Both speech models stay
 loaded across turns. A small Swift helper handles only native audio I/O and echo
 cancellation; setup compiles it to `DATA_DIR/voice/audio`. There is no Swift app UI
 or agent logic, and no FFmpeg/FFplay requirement. Optional Python packages live in `DATA_DIR/voice/runtime`,
 separate from npm dependencies. Setup preserves an existing runtime and does not
-start the microphone. Whisper `base.en` downloads on first use and caches in the
-voice directory; `VOICE_ASR_MODEL` can select another model or local model file.
+start the microphone. Recognition uses NVIDIA's **Parakeet Unified English 0.6B**,
+with the int8 ONNX export and four CPU threads. Setup downloads and verifies the
+public model once (478 MiB download, about 633 MiB installed), into
+`DATA_DIR/voice/parakeet-unified-en-0.6b`. No Hugging Face login is needed for ASR.
+This matches the model family available in Handy, using a different local runtime.
+The existing pause detector sends each completed utterance to Parakeet; recognition
+does not yet produce partial transcripts while you speak. TTS still streams.
+`VOICE_ASR_MODEL` may point to an existing compatible folder containing
+`encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, and `tokens.txt`.
+Older Whisper names such as `base.en` are no longer accepted. Rerun setup after
+upgrading from Whisper; it installs Parakeet without touching chats or workspace files.
 
 For Phonon 40M, accept its terms on the
 [model page](https://huggingface.co/gradium/phonon-40m-en). Either sign in locally

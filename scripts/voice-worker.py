@@ -5,6 +5,7 @@ import collections
 import json
 import math
 import os
+from pathlib import Path
 import queue
 import struct
 import sys
@@ -69,10 +70,18 @@ class SpeechDetector:
                 self.positive = self.silent = self.voiced = 0
 
 
+def transcribe(asr, samples):
+    # A fresh stream prevents one utterance's decoder state leaking into the next.
+    stream = asr.create_stream()
+    stream.accept_waveform(16000, samples)
+    asr.decode_stream(stream)
+    return stream.result.text.strip()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tts-model", required=True)
-    parser.add_argument("--asr-model", default="base.en")
+    parser.add_argument("--asr-model", default="")
     parser.add_argument("--cache-dir", required=True)
     parser.add_argument("--voice", default="")
     parser.add_argument("--silence-ms", type=int, default=400)
@@ -89,11 +98,17 @@ def main():
     import numpy as np
     import ptts
     import webrtcvad
-    from pywhispercpp.model import Model
+    import sherpa_onnx
+    model = Path(args.asr_model or Path(args.cache_dir) / "parakeet-unified-en-0.6b")
+    required = ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"]
+    if not all((model / name).is_file() for name in required):
+        raise FileNotFoundError(f"Parakeet model files are missing from {model}. Run npm run voice:setup; VOICE_ASR_MODEL must name a Parakeet ONNX folder.")
     tts = ptts.TTS(args.tts_model, lang="en", quant="q8")
-    asr = Model(args.asr_model, models_dir=args.cache_dir, n_threads=4,
-                print_progress=False, print_realtime=False, print_timestamps=False,
-                language="en", no_context=True, no_timestamps=True)
+    asr = sherpa_onnx.OfflineRecognizer.from_transducer(
+        encoder=str(model / required[0]), decoder=str(model / required[1]),
+        joiner=str(model / required[2]), tokens=str(model / required[3]),
+        num_threads=4, sample_rate=16000, feature_dim=128,
+        model_type="nemo_transducer", decoding_method="greedy_search", provider="cpu")
     speech_jobs, recognition_jobs = queue.Queue(maxsize=32), queue.Queue(maxsize=1)
     epoch = 0
 
@@ -121,8 +136,7 @@ def main():
             identifier, pcm, ended_at = recognition_jobs.get()
             try:
                 samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
-                segments = asr.transcribe(samples, extract_probability=True)
-                text = " ".join(s.text.strip() for s in segments if s.probability >= 0.45).strip()
+                text = transcribe(asr, samples)
                 send("transcript", id=identifier, text=text,
                      endedAt=ended_at, asrDoneAt=time.time() * 1000)
             except Exception as error:
