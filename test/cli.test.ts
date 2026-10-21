@@ -15,7 +15,7 @@ const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 test("CLI manages models and MCP without opening a conversation or running a server", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-cli-"));
   const run = (...args: string[]) => exec(process.execPath, [cli, ...args], {
-    env: { ...process.env, DATA_DIR: dataDir, TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "", LLM_BASE_URL: "http://127.0.0.1:1/v1" }, timeout: 15000,
+    env: { ...process.env, DATA_DIR: dataDir, GATEWAY_TOKEN: "", GATEWAY_URL: "", TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "", LLM_BASE_URL: "http://127.0.0.1:1/v1" }, timeout: 15000,
   });
   try {
     const help = (await run("--help")).stdout;
@@ -34,6 +34,8 @@ test("CLI manages models and MCP without opening a conversation or running a ser
     await assert.rejects(run("model", "bad", "--url", "file:///tmp"), /HTTP/);
     await assert.rejects(run("modle"), /Unknown command/);
     await assert.rejects(run("model"), /Interactive setup needs a terminal|fetch failed/);
+    await assert.rejects(run("gateway"), /GATEWAY_TOKEN/);
+    await assert.rejects(run("connect", "http://127.0.0.1:1"), /needs a local terminal/);
     await run("mcp", "remove", "local");
     await run("model", "reset");
     settings = readSettings(dataDir);

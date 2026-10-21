@@ -6,7 +6,8 @@ Read node_modules/@earendil-works/pi-durable/README.md and the installed type
 declarations before changing API usage. GitHub main may be newer than npm.
 
 Use plain TypeScript on Node 24.2+ and the upstream Pi Durable demo TUI.
-The user explicitly does not want a web UI. Do not add a web server or frontend.
+The user explicitly does not want a web UI. The private gateway API serves the
+native Mac TUI; do not add a web frontend or replace the Pi generation loop.
 Add dependencies only for a concrete missing capability. No new abstraction layer
 for one implementation. Keep code readable to a human editing a single feature.
 

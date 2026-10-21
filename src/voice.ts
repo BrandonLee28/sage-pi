@@ -42,7 +42,7 @@ export type VoiceEvent = { type: "ready" | "calibrating" | "calibrated" | "level
   id?: number; epoch?: number; text?: string; pcm?: string; sampleRate?: number;
   endedAt?: number; asrDoneAt?: number; message?: string; value?: number };
 
-export function localVoice(config: Config, events: (event: VoiceEvent) => void) {
+export function localVoice(config: Pick<Config, "dataDir">, events: (event: VoiceEvent) => void) {
   const directory = process.env.VOICE_DATA_DIR ?? join(config.dataDir, "voice");
   const python = process.env.VOICE_PYTHON ?? join(directory, "runtime", "bin", "python");
   const silence = Number(process.env.VOICE_SILENCE_MS ?? 400);

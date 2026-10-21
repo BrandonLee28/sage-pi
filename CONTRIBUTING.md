@@ -5,6 +5,9 @@ Pi Durable application: plain TypeScript, Node 24.2+, the upstream terminal UI,
 and native Pi tools, tasks, documents, hooks, and storage. Read [AGENTS.md](AGENTS.md)
 for the rules shared by humans and coding agents.
 
+The gateway owns persistent Pi state and server services. The Mac client owns the
+native TUI and audio. Keep the private terminal API small; it is not a web UI.
+
 ## Your high-level workflow
 
 1. Describe a feature in chat or [open a feature request](https://github.com/BrandonLee28/sage-pi/issues/new/choose).

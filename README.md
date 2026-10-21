@@ -22,22 +22,22 @@ are the change history.
 | Owner-only Telegram topics, uploads, and progress | Optional Telegram gateway |
 | Calendar, document reading, and transcript recall | Native Pi extensions |
 | Local model, search, scraping, and optional Gmail | Configured services and native tools |
+| Persistent gateway with a local Mac TUI and audio | Private terminal API over LAN/Tailscale |
+| Agent desktop on the homelab | Separate upstream Cua Spaces Linux container over MCP |
 
 ## Terminal build
 
-The **actual Pi Durable demo TUI** connected to our personal harness.
-No web UI, HTTP server, or listening port.
+The **actual Pi Durable demo TUI** connected to our personal harness, either in
+one local process or through the private gateway API. No web UI.
 
 ```text
-Your terminal / SSH / docker attach
-                 ↕
-     Pi's original durable TUI
-                 ↕
-   Pi Durable → your llama.cpp server
-       ↕
-SQLite · memory · responsibilities · skills
-       ↕
-   Optional Telegram gateway
+Mac: Pi TUI + microphone + local ASR/TTS
+                 ↕ private API (LAN/Tailscale + bearer token)
+Umbrel: Sage gateway → your model server
+          ↕                  ↕
+ Pi SQLite + workspace    configured tools / Telegram
+          ↕
+ Cua Spaces Linux desktop (separate container, MCP)
 ```
 
 ## Run locally
@@ -82,6 +82,8 @@ sage mcp list
 sage mcp test NAME          # Connect/list tools; never calls a tool
 sage mcp remove NAME
 sage doctor                # Check config, data access, and model discovery
+sage gateway               # Persistent agent + private terminal API
+sage connect http://your-umbrel:8787   # Mac TUI; no local agent database
 sage --help
 ```
 
@@ -160,7 +162,8 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | Ctrl+C / Ctrl+D           | Exit; unfinished durable work resumes on next start                    |
 
 Closing the local TUI stops this process. To keep the agent alive while disconnected,
-use tmux on your server or detach from the running container as described below.
+run `sage gateway` and use `sage connect` on the Mac. Closing a connected TUI
+disconnects that client; the gateway, text work, Telegram, and schedules keep running.
 
 `/new` starts a separate native Pi conversation without clearing or copying the
 previous transcript. Workspace files, memory, tools, and responsibilities stay
@@ -309,19 +312,93 @@ request later fails/retries. Terminal errors keep the text transcript available.
 
 ## Homelab container
 
+The default container is now a persistent gateway, without a TTY. The Portainer
+stack in `compose.yaml` runs it alongside an isolated Cua Linux desktop. This
+targets the Intel/AMD Linux Umbrel host; no model server is bundled.
+
+| Location | Owns |
+| --- | --- |
+| Gateway | Pi loop, SQLite, chats, memory, workspace, schedules, Telegram, calendar/email, web tools, server MCP processes |
+| Mac client | Native Pi TUI, microphone, ASR, TTS, speaker, client theme/audio files |
+| Cua desktop | Its own browser/apps and persistent `/home/cua`; reached only by the gateway through MCP |
+| Model server | Existing configured OpenAI-compatible endpoint; can be a different machine |
+
+Build the image from the feature checkout, then import it into Portainer or build
+it directly on the Umbrel machine:
+
 ```sh
-docker compose up --build -d
-docker attach --sig-proxy=false "$(docker compose ps -q agent)"
+docker buildx build --platform linux/amd64 --load -t sage-pi-gateway:local .
+docker save -o sage-pi-gateway-linux-amd64.tar sage-pi-gateway:local
+# On Umbrel, or use Portainer Images → Import:
+docker load -i sage-pi-gateway-linux-amd64.tar
 ```
 
-Detach with **Ctrl+P, then Ctrl+Q**. The container, scheduled tasks, and Telegram
-continue running. Attach again to the same TUI later. Connect over SSH when remote;
-no application network port is exposed. Stop with `docker compose down`.
+In Portainer, create a Docker Standalone stack from `compose.yaml`. Set
+`GATEWAY_TOKEN` and `CUA_ENV_TOKEN` to **different** values generated with
+`openssl rand -hex 32`. Set `LLM_BASE_URL` to the model endpoint reachable from
+Umbrel, and `GATEWAY_BIND` to the Umbrel LAN/Tailscale address reachable by your Mac.
+The default bind is loopback. Optional service environment variables in the stack
+enable Telegram, search, calendar, and Gmail shell access. The stack is also runnable
+locally with `docker compose up -d` after setting those variables in `.env`.
 
-The container's TTY and stdin stay open. Its named volume `personal-pi` persists data.
-For headless operation instead of the TUI, set the Compose command to
-`["node", "src/cli.ts", "--headless"]`. Locally, use `npm run daemon`.
-Docker execution still needs testing on a machine with its daemon running.
+The existing logical `personal-pi` volume remains the gateway data volume; use the
+same Compose project/Portainer stack name to reuse an existing volume. Changing the
+project name creates different volumes. Back up any existing volume before moving
+it. No automatic data or credential migration from the Mac occurs.
+The gateway runs as the Node user; never open the same live SQLite database from a
+second Sage process. Manage server model/MCP settings using `sage model`/`sage mcp`
+inside the gateway container, then restart it. Those commands on the Mac configure
+standalone local mode, not the remote gateway.
+
+On the Mac, install the same repository revision and Node 24.2+, run `npm ci` and
+optionally `npm link`, then set only client connection configuration:
+
+```sh
+export GATEWAY_URL=http://your-umbrel:8787
+export GATEWAY_TOKEN=the-value-you-set-on-the-gateway
+sage connect
+# With GATEWAY_URL set, plain `sage` also connects.
+```
+
+The client does not load model/service settings or open a local agent database.
+It uses `CLIENT_DATA_DIR` (default `~/.sage`) for audio assets and terminal settings.
+To reuse the existing Mac speech runtime, set `VOICE_DATA_DIR` to its existing
+absolute `data/voice` path; alternatively run voice setup with
+`DATA_DIR="${CLIENT_DATA_DIR:-$HOME/.sage}" npm run voice:setup`. Use `/speak` in the connected TUI.
+Only recognized text, spoken reply text, and playback/status events cross the API;
+microphone PCM, ASR, TTS, and device playback stay on the Mac. Disconnect stops voice
+and restores its temporary reasoning setting; it never auto-resumes the microphone.
+
+The API requires the shared bearer token, rejects browser origins, and has no
+frontend. Use it on your private LAN or Tailscale; HTTP itself does not encrypt
+traffic. Use HTTPS termination if the network is not trusted. Neither the model API
+key nor calendar/email credentials belong on the client. The Cua token is separate
+and stays on the server. There is one interactive TUI connection at a time; Telegram
+and background work remain independent. Reconnect receives current committed Pi
+state, and commands with uncertain delivery are never replayed automatically.
+Slow clients are disconnected rather than buffering indefinitely. Views currently
+use full snapshots; very long transcripts can use substantial bandwidth.
+Files and shell commands refer to the gateway filesystem; this does not add Mac
+file uploads or arbitrary execution on the Mac.
+
+The pinned upstream Cua desktop exposes `/mcp` only on the stack network; the
+gateway registers it as `mcp__desktop__...`. It has its own data volume, needs about
+4 GB of available RAM, and gets no host directories or Docker socket. Sage controls
+that desktop rather than your Mac. Image/screenshots require a vision-capable model.
+The image's built-in viewer is not published by this stack. The desktop's source
+is under FSL-1.1-MIT; the Driver is MIT. See the upstream
+[container connection guide](https://cua.ai/docs/cua-sdk/guides/spacesd) and
+[licensing](https://github.com/trycua/cua#licensing).
+
+To stop the stack, use Portainer or `docker compose down`; retain the volumes.
+`npm run daemon` / `sage --headless` remain available for background operation with
+no terminal API. Plain `sage` without `GATEWAY_URL` retains standalone local mode.
+
+`npm run test:docker` is an opt-in smoke test after building the image. It starts
+fresh AMD64 containers, disposable volumes, and a mock model; verifies a real Cua
+screenshot through Pi, authentication, disconnect, restart persistence and graceful
+shutdown; then removes its resources. It does not use `.env`, real Telegram, or
+external accounts. It is separate from `npm test` and does not run in CI.
 
 ## What is native Pi
 
@@ -591,6 +668,8 @@ headless server; follow the upstream headless instructions and keep credentials 
 ## Small code map
 
 - `src/cli.ts`: TUI/headless entry, Telegram, shutdown.
+- `src/gateway.ts`: Authenticated private API over Pi's existing TUI adapter.
+- `src/gateway-client.ts`: Local TUI connection and Mac audio transport.
 - `src/tui-adapter.ts`: Connect our existing harness to the upstream TUI's view/controller.
 - `vendor/pi-durable-tui/tui.ts`: Actual upstream demo renderer, with provenance and MIT license.
 - `src/assistant.ts`: Assemble native Pi; load extensions, instructions, and skills.

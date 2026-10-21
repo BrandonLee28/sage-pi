@@ -3,7 +3,23 @@ import { join } from "node:path";
 import { readConfig } from "./config.ts";
 
 const args = process.argv.slice(2);
-if (args.length && !(args.length === 1 && args[0] === "--headless")) {
+if (!args.length && process.env.GATEWAY_URL) args.push("connect");
+if (args[0] === "connect") {
+  if (args.length > 2) throw new Error("Usage: sage connect [http://gateway:8787]");
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("sage connect needs a local terminal.");
+  const url = args[1] ?? process.env.GATEWAY_URL;
+  if (!url) throw new Error("Provide a gateway URL or set GATEWAY_URL.");
+  // The client never opens Pi storage, reads server settings, or starts Telegram/MCP.
+  const dataDir = process.env.CLIENT_DATA_DIR ?? join(process.env.HOME ?? process.cwd(), ".sage");
+  process.env.PI_CODING_AGENT_DIR = join(dataDir, "pi");
+  const [{ connectGateway }, { runDurableTui }, { SettingsManager }] = await Promise.all([
+    import("./gateway-client.ts"), import("../vendor/pi-durable-tui/tui.ts"),
+    import("../node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js"),
+  ]);
+  const remote = await connectGateway(url, process.env.GATEWAY_TOKEN ?? "", dataDir);
+  try { await runDurableTui(remote.source, remote.controller, SettingsManager.inMemory()); }
+  finally { await remote.dispose(); }
+} else if (args.length && !(args.length === 1 && ["--headless", "gateway"].includes(args[0]!))) {
   try { await (await import("./manage.ts")).manage(args); }
   catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -14,6 +30,14 @@ if (args.length && !(args.length === 1 && args[0] === "--headless")) {
   const { telegramGateway } = await import("./telegram.ts");
   const { tuiAdapter } = await import("./tui-adapter.ts");
 
+  const gatewayOptions = args[0] === "gateway" ? {
+    token: process.env.GATEWAY_TOKEN ?? "", host: process.env.GATEWAY_HOST ?? "127.0.0.1",
+    port: Number(process.env.GATEWAY_PORT ?? 8787),
+  } : undefined;
+  if (gatewayOptions) {
+    if (gatewayOptions.token.length < 32 || /\s/.test(gatewayOptions.token)) throw new Error("GATEWAY_TOKEN must contain at least 32 non-whitespace characters.");
+    if (!Number.isInteger(gatewayOptions.port) || gatewayOptions.port < 1 || gatewayOptions.port > 65535) throw new Error("Invalid GATEWAY_PORT.");
+  }
   const config = readConfig();
   // Keep Pi's terminal preferences under this application's data directory.
   process.env.PI_CODING_AGENT_DIR ??= join(config.dataDir, "pi");
@@ -25,19 +49,36 @@ if (args.length && !(args.length === 1 && args[0] === "--headless")) {
     await assistant.close();
   };
 
-  if (process.argv.includes("--headless")) {
+  if (args[0] === "gateway" || args[0] === "--headless") {
+    let gateway: { close(): Promise<void> } | undefined;
+    if (gatewayOptions) {
+      try {
+        gateway = await (await import("./gateway.ts")).openGateway(assistant, config, gatewayOptions);
+      } catch (error) { await close(); throw error; }
+    }
     console.log(
-      `Personal Pi running headless (${config.modelId}). No HTTP listener.`,
+      gateway ? `Sage gateway listening on ${process.env.GATEWAY_HOST ?? "127.0.0.1"}:${process.env.GATEWAY_PORT ?? 8787}.`
+        : `Personal Pi running headless (${config.modelId}). No HTTP listener.`,
     );
     telegram?.start(assistant);
-    process.once("SIGINT", () => void close());
-    process.once("SIGTERM", () => void close());
+    let closing = false;
+    const shutdown = async () => {
+      if (closing) return;
+      closing = true;
+      try { await gateway?.close(); }
+      finally { await close(); }
+    };
+    const stop = () => { void shutdown().catch((error) => { console.error(error); process.exitCode = 1; }); };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
     // A process lifetime, not an inference loop. Pi owns scheduling and execution.
     const keepAlive = setInterval(() => {}, 2147483647);
     try {
       await assistant.harness.closed;
     } finally {
       clearInterval(keepAlive);
+      process.off("SIGINT", stop); process.off("SIGTERM", stop);
+      await gateway?.close();
     }
   } else {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
