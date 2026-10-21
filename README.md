@@ -157,7 +157,7 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | `/schedules` or `/crons`   | Inspect recurring routines, cron expressions, and one-time reminders    |
 | `/agents`                 | Alias for `/sessions`                                                  |
 | `/help`                   | Show the short help notice                                             |
-| Ctrl+C / Ctrl+D           | Exit; unfinished durable work resumes on next start                    |
+| `/exit` / Ctrl+C / Ctrl+D | Exit; unfinished durable work resumes on next start                    |
 
 Closing the local TUI stops this process. To keep the agent alive while disconnected,
 use tmux on your server or detach from the running container as described below.
