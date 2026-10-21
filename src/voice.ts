@@ -47,9 +47,10 @@ export function localVoice(config: Config, events: (event: VoiceEvent) => void) 
   let worker: ChildProcessWithoutNullStreams | undefined;
   let microphone: ChildProcessWithoutNullStreams | undefined;
   let player: ChildProcessWithoutNullStreams | undefined;
-  let closed = false, epoch = 0, stderr = "";
+  let closed = false, epoch = 0;
   const children = new Set<ChildProcessWithoutNullStreams>();
   const launch = (command: string, args: string[], critical = false) => {
+    let stderr = "";
     const child = spawn(command, args, { stdio: "pipe", env: process.env });
     children.add(child);
     child.stderr.on("data", (data: Buffer) => { stderr = (stderr + data.toString()).slice(-3000); });
@@ -94,7 +95,7 @@ export function localVoice(config: Config, events: (event: VoiceEvent) => void) 
           if (message.type === "audio") {
             if (message.sampleRate !== 24000 || !message.pcm) throw new Error("Unexpected speech audio format.");
             if (!player) player = launch(process.env.VOICE_FFPLAY ?? "ffplay", ["-nodisp", "-autoexit", "-loglevel", "error",
-              "-f", "f32le", "-ar", "24000", "-ac", "1", "-probesize", "32", "-analyzeduration", "0", "-i", "pipe:0"]);
+              "-f", "f32le", "-sample_rate", "24000", "-ch_layout", "mono", "-probesize", "32", "-analyzeduration", "0", "-i", "pipe:0"]);
             if (!player.stdin.write(Buffer.from(message.pcm, "base64"))) {
               worker!.stdout.pause();
               player.stdin.once("drain", () => worker?.stdout.resume());
