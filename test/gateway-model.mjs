@@ -19,7 +19,7 @@ createServer(async (request, response) => {
   const search = body.tools?.find((tool) => tool.function.name === "tool_search")?.function.name;
   const previous = body.messages.findLast((message) => message.role === "assistant")?.tool_calls?.at(-1)?.function?.name;
   const tool = desktop ? name || search : last?.role === "tool" && previous === search ? name : undefined;
-  const args = tool === search ? { query: "mcp__desktop__get_desktop_state", limit: 1 } : {};
+  const args = tool === search ? { query: "Capture the full display desktop screenshot", limit: 1 } : {};
   response.writeHead(200, { "Content-Type": "text/event-stream" });
   const chunk = (delta, finish_reason = null) => response.write("data: " + JSON.stringify({
     id: "mock-completion", object: "chat.completion.chunk", created: 0, model: "gateway-test-model",
