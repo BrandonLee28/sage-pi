@@ -32,6 +32,7 @@ import {
 } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
+import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { localModels } from "./model.ts";
 import { personalExtension, personalState } from "./personal.ts";
@@ -488,6 +489,7 @@ export async function openAssistant(
       }
       mcp.push(connection);
       registry.install(connection.extension);
+      if (name === "desktop") registry.install(createToolSearchExtension());
     } catch {
       console.error(`[MCP] ${name} unavailable. Run sage mcp test ${name} to diagnose, then restart.`);
     }
