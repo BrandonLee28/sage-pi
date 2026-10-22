@@ -9,12 +9,6 @@ import { defineExtension, defineTool, section } from "@earendil-works/pi-durable
 import type { TSchema } from "@earendil-works/pi-ai";
 import type { McpServer } from "../src/settings.ts";
 
-// Keep common Cua browser tools ready; Pi's native tool_search loads the rest on demand.
-const desktopTools = new Set([
-  "get_browser_state", "browser_prepare", "browser_navigate", "browser_click",
-  "browser_type", "list_windows", "get_guide", "get_desktop_state",
-]);
-
 export async function connectMcp(name: string, server: McpServer, cwd: string, diagnostic = false) {
   const client = new Client({ name: "sage", version: "0.1.0" });
   const env = getDefaultEnvironment();
@@ -48,7 +42,12 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
     const extension = defineExtension({
       name: `mcp:${name}`,
       sections: name === "desktop" ? [section("desktop_tools", () =>
-        "Prefer direct service tools for information they can provide. For browser work, prefer Cua's typed browser tools " +
+        "Computer use is a last resort. For public web research, job openings, availability, and factual lookups, " +
+        "use web_search first and web_extract on relevant official sources. Cua browser tools are still computer use, " +
+        "not web_search or web_extract. If the user says to stop computer use, do not prepare, inspect, navigate, or " +
+        "act on a browser/desktop; missing web tools are a configuration blocker, not permission to continue Cua. " +
+        "Use Cua only when an evidenced limitation of direct tools makes visual interaction necessary, " +
+        "or for an explicit computer-use request, within the user's allowed method. Once computer use is necessary, prefer Cua's typed browser tools " +
         "over repeated desktop screenshots and coordinate clicks. Use get_browser_state with snapshot_format=semantic_v2 " +
         "and a query for the next decision (such as a control's name or role), or scope_ref for its subtree. " +
         "Do not read the entire page to locate one control; widen only when a focused read misses it. " +
@@ -72,7 +71,7 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
           name: toolName,
           description: tool.description ?? `${name}: ${tool.name}`,
           parameters: tool.inputSchema as TSchema,
-          ...(name === "desktop" && !desktopTools.has(tool.name) ? { deferred: true as const } : {}),
+          ...(name === "desktop" ? { deferred: true as const } : {}),
           // External actions must never replay automatically after a crash.
           replay: "unsafe",
           execute: async (args, _api, context) => {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as pause } from "node:timers/promises";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
@@ -857,11 +858,27 @@ test("thinking-only or blank model replies produce an explicit Telegram notice i
   } finally { await assistant.close(); await f.cleanup(); }
 });
 
+test("missing web services are explicit in the native research instructions", async () => {
+  const f = await fixture(); const assistant = await f.open();
+  try {
+    f.faux.setResponses([fauxAssistantMessage("Web tools need configuration.")]);
+    await (await assistant.submit("Use web search and extraction only.")).wait(context);
+    const prompt = getCurrentSystemPrompt((await assistant.root.context(context)).messages);
+    assert.match(prompt, /Available direct web tools: none/);
+    assert.match(prompt, /web_search is unavailable: configure SEARXNG_URL on the gateway/);
+    assert.match(prompt, /web_extract is unavailable: configure FIRECRAWL_URL on the gateway/);
+    const agent = await assistant.root.agent(context);
+    assert.ok(!agent.tools.some((tool) => ["web_search", "web_extract"].includes(tool.name)));
+  } finally { await assistant.close(); await f.cleanup(); }
+});
+
 test("configured search and extraction run through native tools without live services", async (t) => {
   const f = await fixture();
   f.config.searxngUrl = "https://search.invalid/";
   f.config.firecrawlUrl = "https://extract.invalid";
   f.config.firecrawlKey = "test-only-key";
+  Object.assign(f.config.mcpServers, { desktop: { command: process.execPath,
+    args: [fileURLToPath(new URL("./mcp-server.ts", import.meta.url)), "desktop-fixture"] } });
   const requests: string[] = [];
   t.mock.method(globalThis, "fetch", async (
     input: string | URL,
@@ -900,6 +917,10 @@ test("configured search and extraction run through native tools without live ser
   });
   const assistant = await f.open();
   try {
+    const agent = await assistant.root.agent(context);
+    assert.ok(agent.tools.some((tool) => tool.name === "web_search"));
+    assert.ok(agent.tools.some((tool) => tool.name === "web_extract"));
+    assert.ok(!agent.tools.some((tool) => tool.name.startsWith("mcp__desktop__")));
     f.faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall("web_search", { query: "school deadlines" }),
@@ -917,6 +938,10 @@ test("configured search and extraction run through native tools without live ser
     assert.equal(settled.status, "done");
     assert.deepEqual(requests, ["search.invalid", "extract.invalid"]);
     const view = await assistant.root.context(context);
+    const prompt = getCurrentSystemPrompt(view.messages);
+    assert.match(prompt, /Available direct web tools: web_search, web_extract/);
+    assert.match(prompt, /If the user rules out computer use, stop all Cua\/browser activity/);
+    assert.match(prompt, /Do not click Apply/);
     const results = view.messages.filter((message) => message.role === "toolResult");
     assert.equal(results.length, 2);
     assert.ok(results.every((result) => !result.isError));

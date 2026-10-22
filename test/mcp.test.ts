@@ -35,7 +35,7 @@ test("isolated assistant tests do not launch MCP servers from configured setting
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
-test("Cua keeps common browser tools ready and discovers other tools through native Pi", async () => {
+test("all Cua tools are discovered on demand through native Pi", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-cua-discovery-"));
   const config = { ...readConfig(), dataDir, enableShell: false, telegramToken: "", telegramChat: "",
     searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "", appleId: "", appleAppPassword: "", appleCalendarUrl: "",
@@ -47,7 +47,8 @@ test("Cua keeps common browser tools ready and discovers other tools through nat
   let assistant = await open();
   try {
     let agent = await assistant.root.agent(context);
-    assert.ok(agent.tools.some((tool) => tool.name === "mcp__desktop__get_desktop_state"));
+    assert.ok(!agent.tools.some((tool) => tool.name.startsWith("mcp__desktop__")));
+    assert.ok(agent.deferred.some((tool) => tool.name === "mcp__desktop__get_desktop_state"));
     assert.ok(agent.tools.some((tool) => tool.name === "tool_search"));
     assert.ok(!agent.tools.some((tool) => tool.name === "mcp__desktop__click"));
     assert.ok(agent.deferred.some((tool) => tool.name === "mcp__desktop__click"));
@@ -64,6 +65,7 @@ test("Cua keeps common browser tools ready and discovers other tools through nat
     assert.match(JSON.stringify(messages), /live-tab-capability/);
     assert.match(JSON.stringify(messages), /snapshot1:2/);
     assert.match(JSON.stringify(messages), /snapshot_format=semantic_v2/);
+    assert.match(JSON.stringify(messages), /Cua browser tools are still computer use/);
     await assistant.close(); assistant = await open();
     agent = await assistant.root.agent(context);
     assert.ok(agent.tools.some((tool) => tool.name === "mcp__desktop__click"), "loaded tools survive restart");

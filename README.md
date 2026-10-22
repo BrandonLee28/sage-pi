@@ -123,20 +123,31 @@ It does not browse MCP resources/prompts, perform OAuth, or reconnect automatica
 Unavailable servers produce a startup notice; test the connection and restart
 after fixing it. `sage doctor` does not launch MCP processes or call model inference.
 
-For the Cua server named `desktop`, eight common browser/observation tools are
-offered immediately. Other desktop tools remain callable and are loaded on demand
-through Pi Durable's native `tool_search`; loaded tools persist on that conversation
-branch. Other MCP servers keep their existing tool exposure. Browser guidance prefers
-typed navigation, focused semantic reads, and short confirmations, with screenshots
-and native input available when needed. Tool permissions and unsafe replay behavior
-remain in force.
+For the Cua server named `desktop`, all desktop tools are loaded on demand through
+Pi Durable's native `tool_search`. Public research starts with `web_search` and
+`web_extract`; Cua's DOM/browser tools still count as computer use. When the user
+rules out computer use, missing web services are a configuration blocker. Job
+checks must match the requested role, location, and degree level without entering
+sign-in/application flows merely to check a public posting.
+
+Configure `SEARXNG_URL` and `FIRECRAWL_URL` on the gateway to expose the direct web
+tools. Setting them only on the Mac has no effect on gateway tool availability.
+An older generated Portainer test compose explicitly set both to empty strings;
+replace those entries with `${SEARXNG_URL:-}` and `${FIRECRAWL_URL:-}` (and the
+optional `${FIRECRAWL_API_KEY:-}`), then supply their values in Portainer.
+
+Loaded desktop tools persist on that conversation branch. After updating, use
+`/new` for a clean test; previous conversations can retain tools loaded earlier.
+Other MCP servers keep their existing exposure. When computer use is needed,
+guidance prefers typed navigation, focused reads, and brief outcome reports.
+Permissions and unsafe replay behavior remain in force.
 
 `npm run test:cua-performance` is an explicit live component benchmark. Supply a
 reachable `CUA_MCP_URL`, its `CUA_ENV_TOKEN`, and your model settings. It reads the
-tool catalog, then measures a synthetic tool selection with all tools and the focused
-catalog, twice each to expose cache effects. It prints timings, token usage, and the
+tool catalog, then measures a synthetic tool selection with all tools and the
+discovery-only catalog, twice each to expose cache effects. It prints timings, token usage, and the
 selected tool; it executes no desktop actions and is never part of `npm test` or CI.
-This measures catalog overhead, not a complete task. See
+This measures initial catalog overhead, not the extra discovery round or a complete task. See
 [the measured Cua performance investigation](docs/cua-performance.md).
 
 The provider defaults to your supplied `http://example.invalid:8080/v1` llama.cpp endpoint.

@@ -16,13 +16,16 @@ createServer(async (request, response) => {
   const last = body.messages.at(-1);
   const desktop = last?.role === "user" && JSON.stringify(last.content).includes("Inspect the disposable desktop");
   const name = body.tools?.find((tool) => tool.function.name === "mcp__desktop__get_desktop_state")?.function.name;
-  const tool = desktop && name;
+  const search = body.tools?.find((tool) => tool.function.name === "tool_search")?.function.name;
+  const previous = body.messages.findLast((message) => message.role === "assistant")?.tool_calls?.at(-1)?.function?.name;
+  const tool = desktop ? name || search : last?.role === "tool" && previous === search ? name : undefined;
+  const args = tool === search ? { query: "mcp__desktop__get_desktop_state", limit: 1 } : {};
   response.writeHead(200, { "Content-Type": "text/event-stream" });
   const chunk = (delta, finish_reason = null) => response.write("data: " + JSON.stringify({
     id: "mock-completion", object: "chat.completion.chunk", created: 0, model: "gateway-test-model",
     choices: [{ index: 0, delta, finish_reason }],
   }) + "\n\n");
-  chunk(tool ? { role: "assistant", tool_calls: [{ index: 0, id: "desktop-call", type: "function", function: { name, arguments: "{}" } }] }
+  chunk(tool ? { role: "assistant", tool_calls: [{ index: 0, id: tool === search ? "search-call" : "desktop-call", type: "function", function: { name: tool, arguments: JSON.stringify(args) } }] }
     : { role: "assistant", content: "Mock gateway reply." });
   chunk({}, tool ? "tool_calls" : "stop");
   response.end("data: [DONE]\n\n");
