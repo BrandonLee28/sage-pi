@@ -56,7 +56,8 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
         "and use fresh returned refs. " +
         "Use get_guide topic=browser for setup or recovery. If a route is unavailable, follow its recovery hint rather than repeating it. " +
         "Additional desktop tools are available through tool_search, including get_window_state, native input, run_steps and run_script. " +
-        "For a known tool, search its exact name with limit=1; load only the tools needed for the next step. " +
+        "Search distinctive capability terms with a small result limit; inspect the matches and refine if needed, " +
+        "because tool_search ranks relevance rather than looking up exact names. Load only tools needed for the next step. " +
         "For native windows, prefer bounded trees and include_screenshot=false when re-indexing is sufficient; " +
         "request screenshots when visual evidence is needed. Batch already-grounded actions with run_steps where suitable, " +
         "verify the result, and preserve permission and confirmation requirements. " +
