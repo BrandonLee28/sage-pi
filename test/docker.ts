@@ -42,7 +42,10 @@ try {
   await until(async () => JSON.stringify(remote!.source.current().conversation.entries).includes("Mock gateway reply."), "native model/tool completion");
   const entries = remote.source.current().conversation.entries;
   assert.match(JSON.stringify(entries), /mcp__desktop__get_desktop_state/);
-  assert.ok(entries.some((entry) => entry.model?.some((item) => item.role === "toolResult" && !item.isError && item.content.some((part) => part.type === "image"))), "Cua must return a real desktop screenshot through Pi");
+  assert.ok(entries.some((entry) => entry.model?.some((item) => item.role === "toolResult" && !item.isError && item.content.some((part) => part.type === "image"))),
+    "Cua must return a real desktop screenshot through Pi: " + JSON.stringify(entries.flatMap((entry) => entry.model?.filter((item) => item.role === "toolResult").map((item) => ({
+      name: item.toolName, error: item.isError, text: item.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").slice(0, 700),
+    })) ?? [])));
   assert.doesNotMatch(await docker("logs", gateway), /\[MCP\].*unavailable/);
   console.log("PASS: authentication and a real Cua screenshot through Pi's native model/tool loop.");
   const root = remote.source.current().conversation.conversation.id;

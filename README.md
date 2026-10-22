@@ -117,9 +117,38 @@ with a startup diagnostic; rename the conflicting server and restart.
 the SDK's basic process environment. `--token-env` reads an HTTP bearer token by
 name. Store secret values in `.env`/environment, not command arguments or URLs.
 The current MCP bridge supports tools, text, images, and embedded text resources;
-it does not browse MCP resources/prompts, perform OAuth, or reconnect automatically.
+structured results are retained even when a server also returns a text summary.
+This preserves browser tab capabilities, action refs, and coordinate metadata.
+It does not browse MCP resources/prompts, perform OAuth, or reconnect automatically.
 Unavailable servers produce a startup notice; test the connection and restart
 after fixing it. `sage doctor` does not launch MCP processes or call model inference.
+
+For the Cua server named `desktop`, all desktop tools are loaded on demand through
+Pi Durable's native `tool_search`. Public research starts with `web_search` and
+`web_extract`; Cua's DOM/browser tools still count as computer use. When the user
+rules out computer use, missing web services are a configuration blocker. Job
+checks must match the requested role, location, and degree level without entering
+sign-in/application flows merely to check a public posting.
+
+Configure `SEARXNG_URL` and `FIRECRAWL_URL` on the gateway to expose the direct web
+tools. Setting them only on the Mac has no effect on gateway tool availability.
+An older generated Portainer test compose explicitly set both to empty strings;
+replace those entries with `${SEARXNG_URL:-}` and `${FIRECRAWL_URL:-}` (and the
+optional `${FIRECRAWL_API_KEY:-}`), then supply their values in Portainer.
+
+Loaded desktop tools persist on that conversation branch. After updating, use
+`/new` for a clean test; previous conversations can retain tools loaded earlier.
+Other MCP servers keep their existing exposure. When computer use is needed,
+guidance prefers typed navigation, focused reads, and brief outcome reports.
+Permissions and unsafe replay behavior remain in force.
+
+`npm run test:cua-performance` is an explicit live component benchmark. Supply a
+reachable `CUA_MCP_URL`, its `CUA_ENV_TOKEN`, and your model settings. It reads the
+tool catalog, then measures a synthetic tool selection with all tools and the
+discovery-only catalog, twice each to expose cache effects. It prints timings, token usage, and the
+selected tool; it executes no desktop actions and is never part of `npm test` or CI.
+This measures initial catalog overhead, not the extra discovery round or a complete flight search. See
+[the measured Cua performance investigation](docs/cua-performance.md).
 
 The provider defaults to your supplied `http://100.94.249.19:8080/v1` llama.cpp endpoint.
 Startup and `/model` discover the models it advertises (currently `bonsai-27b`).

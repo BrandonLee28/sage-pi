@@ -5,7 +5,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { TSchema } from "@earendil-works/pi-ai";
 import type { McpServer } from "../src/settings.ts";
 
@@ -41,6 +41,28 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
     const names = new Set<string>();
     const extension = defineExtension({
       name: `mcp:${name}`,
+      sections: name === "desktop" ? [section("desktop_tools", () =>
+        "Computer use is a last resort. For public web research, job openings, availability, and factual lookups, " +
+        "use web_search first and web_extract on relevant official sources. Cua browser tools are still computer use, " +
+        "not web_search or web_extract. If the user says to stop computer use, do not prepare, inspect, navigate, or " +
+        "act on a browser/desktop; missing web tools are a configuration blocker, not permission to continue Cua. " +
+        "Use Cua only when an evidenced limitation of direct tools makes visual interaction necessary, " +
+        "or for an explicit computer-use request, within the user's allowed method. Once computer use is necessary, prefer Cua's typed browser tools " +
+        "over repeated desktop screenshots and coordinate clicks. Use get_browser_state with snapshot_format=semantic_v2 " +
+        "and a query for the next decision (such as a control's name or role), or scope_ref for its subtree. " +
+        "Do not read the entire page to locate one control; widen only when a focused read misses it. " +
+        "Omit screenshots when page text and action refs are sufficient. " +
+        "Navigate directly with browser_navigate once a target/tab is bound; pass the same explicit session label on every call " +
+        "and use fresh returned refs. " +
+        "Use get_guide topic=browser for setup or recovery. If a route is unavailable, follow its recovery hint rather than repeating it. " +
+        "Additional desktop tools are available through tool_search, including get_window_state, native input, run_steps and run_script. " +
+        "Search distinctive capability terms with a small result limit; inspect the matches and refine if needed, " +
+        "because tool_search ranks relevance rather than looking up exact names. Load only tools needed for the next step. " +
+        "For native windows, prefer bounded trees and include_screenshot=false when re-indexing is sufficient; " +
+        "request screenshots when visual evidence is needed. Batch already-grounded actions with run_steps where suitable, " +
+        "verify the result, and preserve permission and confirmation requirements. " +
+        "Report the requested outcome briefly; omit internal IDs, refs, and inventories of controls unless asked.",
+      )] : [],
       tools: tools.map((tool) => {
         const fullName = `mcp__${name}__${tool.name.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
         const toolName = fullName.length <= 64 ? fullName : fullName.slice(0, 51) + "_" + createHash("sha256").update(fullName).digest("hex").slice(0, 12);
@@ -50,6 +72,7 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
           name: toolName,
           description: tool.description ?? `${name}: ${tool.name}`,
           parameters: tool.inputSchema as TSchema,
+          ...(name === "desktop" ? { deferred: true as const } : {}),
           // External actions must never replay automatically after a crash.
           replay: "unsafe",
           execute: async (args, _api, context) => {
@@ -60,7 +83,12 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
               if (item.type === "resource" && "text" in item.resource) return { type: "text" as const, text: item.resource.text };
               return { type: "text" as const, text: `MCP returned unsupported content: ${item.type}` };
             });
-            if (!output.length && result.structuredContent) output.push({ type: "text", text: JSON.stringify(result.structuredContent) });
+            // Cua's text can be only a summary; its live tab IDs and action refs are structured.
+            if (result.structuredContent) {
+              const text = JSON.stringify(result.structuredContent);
+              if (!output.some((item) => item.type === "text" && item.text === text))
+                output.push({ type: "text", text });
+            }
             return { output, isError: result.isError === true };
           },
         });

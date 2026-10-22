@@ -19,7 +19,8 @@
     "test:docker": "node test/docker.ts",
     "voice:setup": "node scripts/setup-voice.ts",
     "voice:try": "node bin/sage.mjs connect",
-    "test:live": "node --env-file-if-exists=.env test/live.ts"
+    "test:live": "node --env-file-if-exists=.env test/live.ts",
+    "test:cua-performance": "node --env-file-if-exists=.env test/cua-performance.live.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.3.0",
