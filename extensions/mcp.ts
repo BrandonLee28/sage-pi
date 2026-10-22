@@ -5,9 +5,15 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { TSchema } from "@earendil-works/pi-ai";
 import type { McpServer } from "../src/settings.ts";
+
+// Keep common Cua browser tools ready; Pi's native tool_search loads the rest on demand.
+const desktopTools = new Set([
+  "get_browser_state", "browser_prepare", "browser_navigate", "browser_click",
+  "browser_type", "list_windows", "get_guide", "get_desktop_state",
+]);
 
 export async function connectMcp(name: string, server: McpServer, cwd: string, diagnostic = false) {
   const client = new Client({ name: "sage", version: "0.1.0" });
@@ -41,6 +47,22 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
     const names = new Set<string>();
     const extension = defineExtension({
       name: `mcp:${name}`,
+      sections: name === "desktop" ? [section("desktop_tools", () =>
+        "Prefer direct service tools for information they can provide. For browser work, prefer Cua's typed browser tools " +
+        "over repeated desktop screenshots and coordinate clicks. Use get_browser_state with snapshot_format=semantic_v2 " +
+        "and a query for the next decision (such as a control's name or role), or scope_ref for its subtree. " +
+        "Do not read the entire page to locate one control; widen only when a focused read misses it. " +
+        "Omit screenshots when page text and action refs are sufficient. " +
+        "Navigate directly with browser_navigate once a target/tab is bound; pass the same explicit session label on every call " +
+        "and use fresh returned refs. " +
+        "Use get_guide topic=browser for setup or recovery. If a route is unavailable, follow its recovery hint rather than repeating it. " +
+        "Additional desktop tools are available through tool_search, including get_window_state, native input, run_steps and run_script. " +
+        "For a known tool, search its exact name with limit=1; load only the tools needed for the next step. " +
+        "For native windows, prefer bounded trees and include_screenshot=false when re-indexing is sufficient; " +
+        "request screenshots when visual evidence is needed. Batch already-grounded actions with run_steps where suitable, " +
+        "verify the result, and preserve permission and confirmation requirements. " +
+        "Report the requested outcome briefly; omit internal IDs, refs, and inventories of controls unless asked.",
+      )] : [],
       tools: tools.map((tool) => {
         const fullName = `mcp__${name}__${tool.name.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
         const toolName = fullName.length <= 64 ? fullName : fullName.slice(0, 51) + "_" + createHash("sha256").update(fullName).digest("hex").slice(0, 12);
@@ -50,6 +72,7 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
           name: toolName,
           description: tool.description ?? `${name}: ${tool.name}`,
           parameters: tool.inputSchema as TSchema,
+          ...(name === "desktop" && !desktopTools.has(tool.name) ? { deferred: true as const } : {}),
           // External actions must never replay automatically after a crash.
           replay: "unsafe",
           execute: async (args, _api, context) => {
@@ -60,7 +83,12 @@ export async function connectMcp(name: string, server: McpServer, cwd: string, d
               if (item.type === "resource" && "text" in item.resource) return { type: "text" as const, text: item.resource.text };
               return { type: "text" as const, text: `MCP returned unsupported content: ${item.type}` };
             });
-            if (!output.length && result.structuredContent) output.push({ type: "text", text: JSON.stringify(result.structuredContent) });
+            // Cua's text can be only a summary; its live tab IDs and action refs are structured.
+            if (result.structuredContent) {
+              const text = JSON.stringify(result.structuredContent);
+              if (!output.some((item) => item.type === "text" && item.text === text))
+                output.push({ type: "text", text });
+            }
             return { output, isError: result.isError === true };
           },
         });

@@ -35,6 +35,42 @@ test("isolated assistant tests do not launch MCP servers from configured setting
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
+test("Cua keeps common browser tools ready and discovers other tools through native Pi", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "sage-cua-discovery-"));
+  const config = { ...readConfig(), dataDir, enableShell: false, telegramToken: "", telegramChat: "",
+    searxngUrl: "", firecrawlUrl: "", lightpandaUrl: "", appleId: "", appleAppPassword: "", appleCalendarUrl: "",
+    mcpServers: { desktop: { command: process.execPath,
+      args: [fileURLToPath(new URL("./mcp-server.ts", import.meta.url)), "desktop-fixture"] } },
+  };
+  const faux = fauxProvider(), models = createModels(); models.setProvider(faux.provider);
+  const open = () => openAssistant(config, { models, model: { provider: "faux", modelId: "faux-1" } });
+  let assistant = await open();
+  try {
+    let agent = await assistant.root.agent(context);
+    assert.ok(agent.tools.some((tool) => tool.name === "mcp__desktop__get_desktop_state"));
+    assert.ok(agent.tools.some((tool) => tool.name === "tool_search"));
+    assert.ok(!agent.tools.some((tool) => tool.name === "mcp__desktop__click"));
+    assert.ok(agent.deferred.some((tool) => tool.name === "mcp__desktop__click"));
+    assert.equal(assistant.registry.snapshot().tools().find(({ tool }) => tool.name === "mcp__desktop__click")?.tool.replay, "unsafe");
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("tool_search", { query: "mcp__desktop__click", limit: 1 }), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("mcp__desktop__click", { text: "mock action" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Done."),
+    ]);
+    assert.equal((await (await assistant.submit("Use the mock desktop click.")).wait(context)).status, "done");
+    const messages = (await assistant.root.context(context)).messages;
+    assert.ok(messages.some((message) => message.role === "toolResult" && message.toolName === "mcp__desktop__click" && !message.isError));
+    assert.match(JSON.stringify(messages), /live-browser-target/);
+    assert.match(JSON.stringify(messages), /live-tab-capability/);
+    assert.match(JSON.stringify(messages), /snapshot1:2/);
+    assert.match(JSON.stringify(messages), /snapshot_format=semantic_v2/);
+    await assistant.close(); assistant = await open();
+    agent = await assistant.root.agent(context);
+    assert.ok(agent.tools.some((tool) => tool.name === "mcp__desktop__click"), "loaded tools survive restart");
+    assert.ok(agent.deferred.some((tool) => tool.name === "mcp__desktop__run_steps"), "unused tools stay deferred");
+  } finally { await assistant.close(); await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test("colliding MCP servers cannot shadow installed tools or partially install their tools", async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-mcp-collision-"));
   const server = fileURLToPath(new URL("./mcp-server.ts", import.meta.url));
