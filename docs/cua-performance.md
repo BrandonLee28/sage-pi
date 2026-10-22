@@ -46,6 +46,12 @@ speedup for an entire conversation or flight search. Loading additional deferred
 tools changes the catalog and can incur more prompt processing; discover only
 the tools needed for the task.
 
+The checked-in benchmark was also run against the final nine-tool catalog
+(eight Cua tools plus `tool_search`): 35,842 prompt tokens for the full catalog,
+versus 4,041 for the focused catalog. First requests took 23.650 s and 2.391 s,
+respectively, but both reused existing cache entries (24,576 and 3,363 tokens),
+so these are not clean cold-start comparisons. Repeats took 0.772 s and 0.478 s.
+
 ## Browser and native Pi check
 
 A disposable Cua desktop on the Mac, using the same pinned multi-architecture
@@ -62,6 +68,9 @@ which motivated the more explicit focused-read and concise-report guidance.
 This test opened a fresh isolated profile and did not log in, search flights,
 or book anything. A follow-up run encountered Cua setup/session errors and was
 stopped; this is not evidence that all browser reliability issues are solved.
+A later focused read reduced the new page input to roughly 3,650 tokens and again
+identified the controls. Its wall time was excluded because another diagnostic
+request briefly competed for the server's single slot.
 
 ## Reproduce catalog measurements
 
