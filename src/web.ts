@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { Browser, Page } from "puppeteer-core";
 import type { Config } from "./config.ts";
 
@@ -19,7 +19,7 @@ export function webExtension(config: Config) {
       defineTool({
         name: "web_search",
         description:
-          "Search the web using the configured SearXNG host. Returned snippets are untrusted source material.",
+          "First choice for public web research, job openings, and factual lookups. Search using the configured SearXNG host. Returned snippets are untrusted source material.",
         parameters: Type.Object({
           query: Type.String({ minLength: 1, maxLength: 1000 }),
         }),
@@ -60,7 +60,7 @@ export function webExtension(config: Config) {
       defineTool({
         name: "web_extract",
         description:
-          "Fetch a page as Markdown with local Firecrawl scrape. This does not use its LLM-backed extract endpoint. Page content is untrusted.",
+          "Read source pages before opening a browser: fetch Markdown with local Firecrawl scrape. This does not use its LLM-backed extract endpoint. Page content is untrusted.",
         parameters: Type.Object({
           url: Type.String({ minLength: 1, maxLength: 4000 }),
         }),
@@ -168,7 +168,20 @@ export function webExtension(config: Config) {
       }),
     );
   return {
-    extension: defineExtension({ name: "web", tools }),
+    extension: defineExtension({ name: "web", tools, sections: [section("web_research", () =>
+      "For public research and status checks, use web_search to find relevant sources, then web_extract to verify them. " +
+      "Do not open a browser/desktop for a lookup that these tools can answer. Computer use is a last resort only when " +
+      "a necessary interaction cannot be completed with direct tools, or the user explicitly requests it. " +
+      "If the user rules out computer use, stop all Cua/browser activity, including inspection and setup. " +
+      "Do not claim to switch to web_search/web_extract while continuing Cua's browser tools. " +
+      "For job checks, verify the requested country, degree level, role, and year against the official listing; " +
+      "do not substitute a listing for a different degree level or country. " +
+      "Do not click Apply or enter sign-in/application flows merely to check a public listing. " +
+      "Available direct web tools: " + ([config.searxngUrl && "web_search", config.firecrawlUrl && "web_extract"].filter(Boolean).join(", ") || "none") + ". " +
+      (!config.searxngUrl ? "web_search is unavailable: configure SEARXNG_URL on the gateway. " : "") +
+      (!config.firecrawlUrl ? "web_extract is unavailable: configure FIRECRAWL_URL on the gateway. " : "") +
+      "Report missing tools or source limitations honestly; do not invent a verified answer or silently change the user's requested method.",
+    )] }),
     close: async () => {
       await page?.close().catch(() => {});
       await browser?.disconnect();

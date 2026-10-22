@@ -9,18 +9,46 @@ promise about the duration of a flight search.
 
 1. The pinned Cua desktop advertises 63 tools. Their model-facing descriptions
    and input schemas occupied roughly 142,000 characters before OpenAI wrapping.
-   Sage previously offered all of them on every request. Eight common browser
-   and observation tools now remain immediately available; Pi Durable's native
-   `tool_search` discovers and loads other desktop tools on demand. Loaded tools
+   Sage previously offered all of them on every request. Pi Durable's native
+   `tool_search` now discovers and loads all desktop tools on demand. Loaded tools
    persist on the conversation branch. No tools or permissions were removed.
 2. The MCP bridge discarded `structuredContent` whenever text content existed.
    Cua sometimes returns only a sentence of text while putting live tab IDs,
    browser targets, action refs, and capture metadata in its structured result.
    Sage now includes both, avoiding an exact duplicate JSON text block.
 3. Cua supports typed browser navigation and semantic page reads in the existing
-   pinned desktop image. Guidance now prefers those tools, explicit consistent
+   pinned desktop image. Once computer use is necessary, guidance prefers those tools, explicit consistent
    session labels, focused queries, and brief outcome reports. Screenshots and
    native input remain available when visual evidence is necessary.
+4. Public research now explicitly starts with `web_search` and `web_extract`.
+   The original generated Portainer test compose disabled both services with
+   literal empty URLs, so its agent had no direct web tools even though the
+   services existed. Those entries must allow the configured gateway URLs.
+   All Cua tools are now deferred rather than offering eight eagerly. Cua's typed
+   browser tools are still computer use; a user prohibition applies to those too.
+
+The timing tables below describe the earlier eight-tool prototype, not a new
+end-to-end measurement of the current fully deferred catalog. The opt-in catalog
+benchmark now measures the initial discovery-only request, not the subsequent
+tool-loading round.
+
+## Web-first routing checks
+
+After the report of Cua being used for a public job-status lookup, all Cua tools
+were changed to deferred tools. `web_search` and `web_extract` stay immediately
+available when their gateway services are configured. The native research prompt
+names unavailable tools and their required gateway variables rather than claiming
+to switch methods. It also distinguishes degree/country requirements and avoids
+clicking Apply or entering sign-in flows just to inspect a public posting.
+
+Two real Bonsai checks used a temporary Pi workspace, mocked SearXNG/Firecrawl
+responses, and a mock desktop MCP. The fixtures contained both a PhD posting in
+India and an undergraduate posting in the US. Bonsai used `web_search` followed
+by `web_extract`, selected the matching undergraduate fixture, and made no Cua
+calls in either case: an ordinary research request and an explicit no-computer-use
+request with desktop tools already loaded in the conversation. These fixture
+answers say nothing about Google's actual current job openings. Normal automated
+tests use a faux model; the real-model checks were opt-in diagnostics.
 
 ## Controlled catalog measurement
 
@@ -46,7 +74,7 @@ speedup for an entire conversation or flight search. Loading additional deferred
 tools changes the catalog and can incur more prompt processing; discover only
 the tools needed for the task.
 
-The checked-in benchmark was also run against the final nine-tool catalog
+The benchmark was also run against the intermediate nine-tool catalog
 (eight Cua tools plus `tool_search`): 35,842 prompt tokens for the full catalog,
 versus 4,041 for the focused catalog. First requests took 23.650 s and 2.391 s,
 respectively, but both reused existing cache entries (24,576 and 3,363 tokens),
