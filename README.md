@@ -319,6 +319,9 @@ After upgrading, run `npm run voice:setup` once to rebuild the native audio help
 Streaming words already heard cannot be taken back if a model
 request later fails/retries. Terminal errors keep the text transcript available.
 
+Voice skips phrases that Phonon normalizes to empty text (such as standalone emojis)
+without turning voice off. Other synthesis errors are still reported.
+
 ## Homelab container
 
 The default container is now a persistent gateway, without a TTY. The Portainer

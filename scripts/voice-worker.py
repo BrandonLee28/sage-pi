@@ -125,6 +125,8 @@ def main():
                 if job["type"] == "finish":
                     send("audio_end", epoch=job["epoch"])
                     continue
+                if not job["text"].strip():
+                    continue
                 options = {"voice": args.voice} if args.voice else {}
                 with tts.stream(job["text"], **options) as audio:
                     for pcm in audio:
@@ -140,6 +142,10 @@ def main():
                             send("audio", epoch=job["epoch"], sampleRate=audio.sample_rate,
                                  pcm=base64.b64encode(chunk.astype("<f4").tobytes()).decode())
             except Exception as error:
+                # ptts 0.4.0 normalizes emoji-only chunks to empty text (plan.rs).
+                # This is a silent phrase, not a failed voice session.
+                if isinstance(error, ValueError) and str(error) == "nothing to synthesize: the text is empty":
+                    continue
                 send("error", message=f"Speech generation failed: {error}")
 
     def recognize():
