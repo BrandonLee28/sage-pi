@@ -307,6 +307,9 @@ long speech is split into bounded utterances, and excessive queued output stops
 voice with an error. Streaming words already heard cannot be taken back if a model
 request later fails/retries. Terminal errors keep the text transcript available.
 
+Voice skips phrases that Phonon normalizes to empty text (such as standalone emojis)
+without turning voice off. Other synthesis errors are still reported.
+
 ## Homelab container
 
 ```sh
