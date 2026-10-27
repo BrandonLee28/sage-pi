@@ -25,6 +25,8 @@ async function fixture() {
   const config = {
     ...readConfig(),
     dataDir,
+    baseUrl: "http://127.0.0.1:8080/v1",
+    modelId: "test-model",
     mcpServers: {},
     enableShell: false,
     telegramToken: "",
@@ -1142,7 +1144,7 @@ test("one model stream serves multiple conversations, including cancellation whi
 test("Pi reasoning controls reach llama.cpp, refresh local models, and survive restart", async (t) => {
   const f = await fixture();
   const requests: { model: string; chat_template_kwargs: Record<string, unknown>; thinking_budget_tokens?: number; max_tokens: number }[] = [];
-  let catalog = ["example-model"];
+  let catalog = ["test-model"];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.pathname.endsWith("/models"))
@@ -1159,7 +1161,7 @@ test("Pi reasoning controls reach llama.cpp, refresh local models, and survive r
     });
   });
   const models = await localModels(f.config);
-  assert.ok(models.getModel("local", "example-model")?.input.includes("image"));
+  assert.ok(models.getModel("local", "test-model")?.input.includes("image"));
   const open = () => openAssistant(f.config, { models });
   let assistant = await open();
   let adapter = await tuiAdapter(assistant, f.config);
@@ -1177,7 +1179,7 @@ test("Pi reasoning controls reach llama.cpp, refresh local models, and survive r
       await adapter.controller.cycleThinking();
     }
     assert.equal(agentOf(adapter.source.current().conversation).thinkingLevel, "low");
-    catalog = ["example-model", "second-local-model"];
+    catalog = ["test-model", "second-local-model"];
     await adapter.controller.refreshModels();
     assert.equal(adapter.source.current().models.length, 2);
     assert.ok(adapter.source.current().models.every((model) => model.provider === "local"));

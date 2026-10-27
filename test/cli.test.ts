@@ -72,6 +72,18 @@ test("unconfigured client startup never creates a local workspace or database", 
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("gateway requires an explicitly configured model and endpoint before creating storage", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sage-gateway-config-"));
+  const server = join(directory, "server");
+  const env = { ...process.env, DATA_DIR: server, GATEWAY_TOKEN: "test-token".repeat(4), LLM_BASE_URL: "", LLM_MODEL: "", TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "" };
+  try {
+    await assert.rejects(exec(process.execPath, [cli, "gateway"], { env }), /Configure LLM_BASE_URL and LLM_MODEL/);
+    await assert.rejects(exec(process.execPath, [cli, "gateway"], { env: { ...env, LLM_BASE_URL: "http://127.0.0.1:8080/v1" } }), /Configure LLM_BASE_URL and LLM_MODEL/);
+    await assert.rejects(exec(process.execPath, [cli, "gateway"], { env: { ...env, LLM_BASE_URL: "file:///tmp", LLM_MODEL: "test-model" } }), /HTTP/);
+    await assert.rejects(access(server), { code: "ENOENT" });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("CLI manages models and MCP without opening a conversation or running a server", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "sage-cli-"));
   const run = (...args: string[]) => exec(process.execPath, [cli, ...args], {

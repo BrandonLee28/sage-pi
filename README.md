@@ -23,7 +23,7 @@ are the change history.
 | Calendar, document reading, and transcript recall | Native Pi extensions |
 | Local model, search, scraping, and optional Gmail | Configured services and native tools |
 | Persistent gateway with a local Mac TUI and audio | Private terminal API over LAN/Tailscale |
-| Agent desktop on the homelab | Separate upstream Cua Spaces Linux container over MCP |
+| Agent desktop | Separate upstream Cua Spaces Linux container over MCP |
 
 ## Terminal build
 
@@ -121,11 +121,10 @@ it does not browse MCP resources/prompts, perform OAuth, or reconnect automatica
 Unavailable servers produce a startup notice; test the connection and restart
 after fixing it. `sage doctor` does not launch MCP processes or call model inference.
 
-The provider defaults to your supplied `http://example.invalid:8080/v1` llama.cpp endpoint.
-Startup and `/model` discover the models it advertises (currently `example-model`).
+Configure `LLM_BASE_URL` and `LLM_MODEL`, or use `sage model MODEL_ID --url URL`.
+Startup and `/model` discover models advertised by the configured endpoint.
 Model discovery also reads llama.cpp's `/props` modalities. Vision-enabled servers
-offer image input, using Pi's native image reader and image resizing; your current
-example model server reports vision enabled.
+offer image input, using Pi's native image reader and image resizing.
 `LLM_MODEL` is the preferred initial model and the fallback if discovery is offline.
 Your saved model choice is retained while the server still advertises it.
 
@@ -133,12 +132,12 @@ Reasoning defaults to **Low**. Press **Shift+Tab** to cycle **Low → Medium →
 → Off**, using Pi's native saved thinking level for the selected conversation.
 Both model and reasoning choices survive restart. New Telegram threads start at Low.
 The adapter sends `enable_thinking` and `reasoning_effort` through Pi's native
-chat-template compatibility settings. Its supported levels match your current
-example model template; review `src/model.ts` if you load a model with different controls.
+chat-template compatibility settings. Review `src/model.ts` if your endpoint's
+model uses different controls.
 Low/Medium/XHigh also send an enforced `thinking_budget_tokens` cap of 512/2048/6144
 through Pi's native compatibility field. Pi clamps these budgets to leave at least
 1024 tokens for the answer under a smaller output limit. Low's prompt hint alone
-does not reliably shorten example model's reasoning; the hard budget is what bounds it.
+may not reliably shorten reasoning; the hard budget is what bounds it.
 `LLM_MAX_TOKENS` defaults to 8192 and includes reasoning as well as the visible answer.
 The model stream timeout is five minutes. An empty model answer now produces an
 explicit Telegram failure notice rather than being silently marked delivered.
@@ -618,11 +617,8 @@ notice. It never includes reasoning text, tool arguments, or document contents.
 Status updates are best-effort and do not change the native agent loop.
 `/stop` in Telegram stops work in that thread; scheduled check-ins remain.
 Topic routing uses Telegram's native [`message_thread_id`](https://core.telegram.org/bots/api#sendmessage).
-SearXNG and Firecrawl have passed checks
-through the real model and native tool loop. The existing Telegram bot and owner
-chat credentials have been validated, and Hermes's gateway has been stopped.
-Restart an already-open TUI to load the new Telegram settings, then send the bot
-a message to verify replies. Gmail sign-in and Lightpanda are deferred.
+Restart an already-open TUI to load new Telegram settings, then send the bot
+a message to verify replies.
 If the existing bot is used by Hermes, stop its Telegram gateway before starting
 ours: two polling clients cannot share the same bot. Send the bot a message first.
 
@@ -630,7 +626,7 @@ ours: two polling clients cannot share the same bot. Send the bot a message firs
 
 Calendar uses [tsdav](https://github.com/natelindev/tsdav) for CalDAV and
 [ical.js](https://github.com/kewisch/ical.js) for event parsing/serialization, on
-both macOS and the homelab container. Your local configuration selects **Personal**.
+both macOS and the gateway container.
 
 Set these in `.env`:
 

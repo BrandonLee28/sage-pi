@@ -41,9 +41,9 @@ export function readConfig() {
     modelRevision: settings.model?.revision,
     mcpServers,
     baseUrl: (
-      settings.model?.baseUrl ?? process.env.LLM_BASE_URL ?? "http://example.invalid:8080/v1"
+      settings.model?.baseUrl ?? process.env.LLM_BASE_URL ?? ""
     ).replace(/\/$/, ""),
-    modelId: settings.model?.id ?? process.env.LLM_MODEL ?? "example-model",
+    modelId: settings.model?.id ?? process.env.LLM_MODEL ?? "",
     apiKey: process.env.LLM_API_KEY ?? "",
     enableShell: process.env.ENABLE_SHELL !== "false",
     searxngUrl: process.env.SEARXNG_URL ?? "",
