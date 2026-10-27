@@ -9,6 +9,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { SageHeader, registerSageTheme, selectOption, textPrompt } from "./cli-ui.ts";
 const help = `sage                         Open the gateway TUI (first run asks for connection)
 sage setup                   Configure/connect to the gateway
+sage update                  Update the installed Mac client from GitHub
 sage model [ID] [--url URL]   Choose a model / OpenAI-compatible endpoint
 sage model reset             Use .env model defaults again
 sage mcp                     Manage MCP servers interactively

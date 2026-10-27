@@ -1,11 +1,28 @@
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, realpath } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { clientDataDir, gatewayUrl, readSettings, saveSettings } from "./settings.ts";
 
 const args = process.argv.slice(2);
 const clientDir = clientDataDir();
 if (!args.length || (args.length === 1 && args[0] === "setup")) args.splice(0, args.length, "connect");
-if (args[0] === "voice") {
+if (args[0] === "update") {
+  if (args.length !== 1) throw new Error("Usage: sage update");
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const managed = join(homedir(), ".local", "share", "sage");
+  if (await realpath(root) !== await realpath(managed).catch(() => ""))
+    throw new Error("sage update requires the managed installation in ~/.local/share/sage. Update this checkout with Git instead.");
+  for (const [command, commandArgs] of [
+    ["git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "pull", "--ff-only"]],
+    ["npm", ["ci", "--omit=dev"]],
+  ] as const) {
+    const result = spawnSync(command, commandArgs, { cwd: root, stdio: "inherit" });
+    if (result.error) throw result.error;
+    if (result.status !== 0) { process.exitCode = result.status ?? 1; break; }
+  }
+} else if (args[0] === "voice") {
   if (args.length !== 3 || args[1] !== "model" || !args[2]?.trim())
     throw new Error("Usage: sage voice model /path/to/phonon-40m-en (or hf://gradium/phonon-40m-en)");
   const ttsModel = args[2].startsWith("hf://") ? args[2] : resolve(args[2]);

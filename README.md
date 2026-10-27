@@ -42,7 +42,21 @@ Umbrel: Sage gateway → your model server
 
 ## Run the Mac client
 
-Node 24.2+ is required. From this directory:
+Install Node 24.2+, Git, and the GitHub CLI (`gh`). Run `gh auth login` once with
+an account that can access this private repository. Then install from any directory:
+
+```sh
+gh api -H 'Accept: application/vnd.github.raw+json' 'repos/BrandonLee28/sage-pi/contents/scripts/install.sh?ref=main' | sh
+sage
+```
+
+Update later with `sage update`. The install and update use the latest `main` and
+preserve your connection and voice settings in `~/.sage`. The installer puts Sage
+in `~/.local/share/sage`, links it in `~/.local/bin`, and adds that directory to
+your zsh PATH if needed. Open a new terminal or run `export PATH="$HOME/.local/bin:$PATH"`
+in the current terminal before running `sage`.
+
+For development from a checkout:
 
 ```sh
 npm ci
@@ -60,6 +74,8 @@ Existing local `data/` is preserved but normal client startup does not open it.
 ## Sage CLI
 
 Run `npm link` once in this checkout to make `sage` available on your PATH.
+For a development checkout, use Git to update it; `sage update` only updates the
+managed installation.
 Without linking, use `npm run sage -- <command>`. Client startup ignores the server
 `.env`. Explicit server and administration commands load this checkout's `.env` and
 resolve relative `DATA_DIR` paths from here, even when called elsewhere.
@@ -75,6 +91,7 @@ and source reference preserved in [vendor/prime-design](vendor/prime-design/READ
 
 ```sh
 sage setup                 # Connect to the gateway
+sage update                # Update the installed Mac client from GitHub
 sage model                 # Pick from the endpoint's advertised models
 sage model MODEL_ID --url http://localhost:8080/v1
 sage model reset           # Return to .env model defaults
