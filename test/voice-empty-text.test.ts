@@ -15,6 +15,8 @@ test("speech worker skips normalized-empty phrases, continues speech, and report
 import sys, types, runpy
 from contextlib import nullcontext
 class PCM:
+    def __len__(self): return 1
+    def __getitem__(self, _): return self
     def astype(self, _): return self
     def tobytes(self): return bytes(4)
 class Audio:

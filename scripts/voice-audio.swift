@@ -67,7 +67,7 @@ final class VoiceAudio {
             send(["type": "error", "message": "Audio device changed. Restart /speak to recalibrate."])
             exit(1)
         }
-        send(["type": "ready"])
+        send(["type": "ready", "playbackCredits": true])
     }
 
     func handle(_ job: [String: Any]) throws {
@@ -92,7 +92,12 @@ final class VoiceAudio {
             _ = data.withUnsafeBytes { bytes in memcpy(buffer.floatChannelData![0], bytes.baseAddress!, data.count) }
             queuedFrames += frames
             player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in
-                self.commands.async { if self.epoch == requested { self.queuedFrames -= frames } }
+                self.commands.async {
+                    if self.epoch == requested {
+                        self.queuedFrames -= frames
+                        send(["type": "audio_played", "epoch": requested, "frames": frames])
+                    }
+                }
             }
         } else if type == "audio_end" {
             // A marker scheduled after all speech reports actual playback completion, not synthesis completion.

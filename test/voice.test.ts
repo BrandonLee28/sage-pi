@@ -16,6 +16,7 @@ import { voiceReply } from "../src/voice-reply.ts";
 import { tuiAdapter } from "../src/tui-adapter.ts";
 import { singleStream } from "../src/model.ts";
 import { VoiceMode } from "../extensions/voice.ts";
+import { saveSettings } from "../src/settings.ts";
 
 async function until(check: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 500; i++) { if (await check()) return; await pause(10); }
@@ -45,7 +46,7 @@ test("spoken phrases stream bounded sentences and omit fenced code and Markdown"
 test("native audio bridge waits for playback completion and ignores canceled audio", async (t) => {
   if (process.platform !== "darwin") return t.skip("Local voice is macOS-only");
   const directory = await mkdtemp(join(tmpdir(), "sage-voice-pipes-"));
-  const keys = ["VOICE_PYTHON", "VOICE_AUDIO", "VOICE_DATA_DIR"];
+  const keys = ["VOICE_PYTHON", "VOICE_AUDIO", "VOICE_DATA_DIR", "VOICE_TTS_MODEL"];
   const previous = keys.map((key) => process.env[key]);
   const events: VoiceEvent[] = [];
   let engine: ReturnType<typeof localVoice> | undefined;
@@ -54,11 +55,13 @@ test("native audio bridge waits for playback completion and ignores canceled aud
     const device = join(directory, "audio");
     await writeFile(worker, `#!/usr/bin/env node
 const {createInterface}=require('node:readline');
+require('node:fs').writeFileSync(require('node:path').join(process.env.VOICE_DATA_DIR,'model-used'),process.argv[process.argv.indexOf('--tts-model')+1]);
 const send=(value)=>process.stdout.write(JSON.stringify(value)+'\\n');
 send({type:'ready'});
 createInterface({input:process.stdin}).on('line',line=>{
  const job=JSON.parse(line);
  if(job.type==='mic') send({type:'calibrated',value:-40});
+ if(job.type==='played') require('node:fs').writeFileSync(require('node:path').join(process.env.VOICE_DATA_DIR,'credits-used'),JSON.stringify(job));
  if(job.type==='speak') {
   send({type:'audio',epoch:job.epoch,sampleRate:24000,pcm:'AAAAAA=='});
   send({type:'audio_end',epoch:job.epoch});
@@ -68,17 +71,22 @@ createInterface({input:process.stdin}).on('line',line=>{
     await writeFile(device, `#!/usr/bin/env node
 const {createInterface}=require('node:readline');
 const send=(value)=>process.stdout.write(JSON.stringify(value)+'\\n');
-send({type:'ready'}); send({type:'mic',pcm:'AAAAAA=='});
+send({type:'ready',playbackCredits:true}); send({type:'mic',pcm:'AAAAAA=='});
 createInterface({input:process.stdin}).on('line',line=>{
  const job=JSON.parse(line);
  // Emit even canceled epochs to exercise the application's late-event guard.
- if(job.type==='audio_end') setTimeout(()=>send(job),200);
+ if(job.type==='audio_end') setTimeout(()=>{
+  send({type:'audio_played',epoch:job.epoch,frames:1}); send(job);
+ },200);
 });
 `, { mode: 0o700 });
     process.env.VOICE_PYTHON = worker; process.env.VOICE_AUDIO = device; process.env.VOICE_DATA_DIR = directory;
+    delete process.env.VOICE_TTS_MODEL;
+    await saveSettings(directory, { voice: { ttsModel: "/saved/local/speech model" } });
     engine = localVoice({ ...readConfig(), dataDir: directory }, (event) => events.push(event));
     await engine.start();
     await until(() => events.some((event) => event.type === "calibrated"));
+    assert.equal(await readFile(join(directory, "model-used"), "utf8"), "/saved/local/speech model");
     engine.speak("Hello.");
     await until(() => events.some((event) => event.type === "audio"));
     assert.ok(!events.some((event) => event.type === "audio_end"), "synthesis completion must not masquerade as playback completion");
@@ -87,7 +95,20 @@ createInterface({input:process.stdin}).on('line',line=>{
     assert.ok(!events.some((event) => event.type === "audio_end"), "late canceled playback must not reset a newer turn");
     engine.speak("A new reply.");
     await until(() => events.some((event) => event.type === "audio_end" && event.epoch === 1));
+    await until(async () => await readFile(join(directory, "credits-used"), "utf8").then(() => true, () => false));
+    assert.deepEqual(JSON.parse(await readFile(join(directory, "credits-used"), "utf8")), { type: "played", epoch: 1, frames: 1 });
+    assert.ok(!JSON.stringify(events).includes("audio_played"), "playback credits stay on the Mac");
     assert.ok(!events.some((event) => event.type === "error"), JSON.stringify(events));
+    engine.stop();
+    process.env.VOICE_TTS_MODEL = "/explicit/override";
+    engine = localVoice({ dataDir: directory }, (event) => events.push(event));
+    await engine.start();
+    await until(async () => await readFile(join(directory, "model-used"), "utf8") === "/explicit/override");
+    engine.stop();
+    await writeFile(device, (await readFile(device, "utf8")).replace("playbackCredits:true", "playbackCredits:false"));
+    engine = localVoice({ dataDir: directory }, (event) => events.push(event));
+    await engine.start();
+    await until(() => events.some((event) => event.type === "error" && event.message?.includes("audio is outdated")));
   } finally {
     engine?.stop();
     keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
