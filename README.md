@@ -127,14 +127,11 @@ For the Cua server named `desktop`, all desktop tools are loaded on demand throu
 Pi Durable's native `tool_search`. Public research starts with `web_search` and
 `web_extract`; Cua's DOM/browser tools still count as computer use. When the user
 rules out computer use, missing web services are a configuration blocker. Job
-checks must match the requested role, location, and degree level without entering
-sign-in/application flows merely to check a public posting.
+checks must respect user-specified criteria without entering sign-in flows.
 
 Configure `SEARXNG_URL` and `FIRECRAWL_URL` on the gateway to expose the direct web
 tools. Setting them only on the Mac has no effect on gateway tool availability.
-An older generated Portainer test compose explicitly set both to empty strings;
-replace those entries with `${SEARXNG_URL:-}` and `${FIRECRAWL_URL:-}` (and the
-optional `${FIRECRAWL_API_KEY:-}`), then supply their values in Portainer.
+Configure these variables in the gateway environment before starting it.
 
 Loaded desktop tools persist on that conversation branch. After updating, use
 `/new` for a clean test; previous conversations can retain tools loaded earlier.
@@ -147,8 +144,8 @@ reachable `CUA_MCP_URL`, its `CUA_ENV_TOKEN`, and your model settings. It reads 
 tool catalog, then measures a synthetic tool selection with all tools and the
 discovery-only catalog, twice each to expose cache effects. It prints timings, token usage, and the
 selected tool; it executes no desktop actions and is never part of `npm test` or CI.
-This measures initial catalog overhead, not the extra discovery round or a complete task. See
-[the measured Cua performance investigation](docs/cua-performance.md).
+This measures initial catalog overhead, not the extra discovery round or an entire task. See
+[the Cua performance guide](docs/cua-performance.md).
 
 The provider defaults to your supplied `http://example.invalid:8080/v1` llama.cpp endpoint.
 Startup and `/model` discover the models it advertises (currently `example-model`).
