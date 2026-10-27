@@ -1,6 +1,6 @@
 import { access, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { clientDataDir, gatewayUrl, readSettings, saveSettings } from "./settings.ts";
+import { clientDataDir, gatewayUrl, httpUrl, readSettings, saveSettings } from "./settings.ts";
 
 const args = process.argv.slice(2);
 const clientDir = clientDataDir();
@@ -68,6 +68,9 @@ if (args[0] === "voice") {
     import("./assistant.ts"), import("./telegram.ts"), import("./config.ts"), import("./gateway.ts"),
   ]);
   const config = readConfig();
+  if (!config.baseUrl.trim() || !config.modelId.trim())
+    throw new Error("Configure LLM_BASE_URL and LLM_MODEL, or use sage model MODEL_ID --url URL before starting the gateway.");
+  httpUrl(config.baseUrl);
   process.env.PI_CODING_AGENT_DIR ??= join(config.dataDir, "pi");
   await mkdir(process.env.PI_CODING_AGENT_DIR, { recursive: true });
   const telegram = telegramGateway(config);

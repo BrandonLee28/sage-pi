@@ -33,7 +33,7 @@ export async function localModels(config: Config) {
     api: "openai-completions",
     baseUrl: config.baseUrl,
     reasoning: true,
-    // Supported by the active example model template on the user's llama.cpp server.
+    // The endpoint's chat template must support these reasoning levels.
     thinkingLevelMap: {
       off: "none", minimal: null, low: "low", medium: "medium",
       high: null, xhigh: "xhigh", max: null,

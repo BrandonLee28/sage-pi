@@ -9,7 +9,7 @@ services:
       GATEWAY_PORT: 8787
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:?Set a random GATEWAY_TOKEN of at least 32 characters}
       LLM_BASE_URL: ${LLM_BASE_URL:?Set your model endpoint reachable from Umbrel}
-      LLM_MODEL: ${LLM_MODEL:-example-model}
+      LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_CONTEXT: ${LLM_CONTEXT:-65536}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-8192}
