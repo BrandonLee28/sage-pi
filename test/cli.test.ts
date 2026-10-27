@@ -18,8 +18,8 @@ test("installer links Sage on PATH and refuses to overwrite an installation", as
   try {
     await mkdir(commands);
     await writeFile(join(commands, "git"), '#!/bin/sh\nfor arg do target="$arg"; done\nmkdir -p "$target/bin"\nprintf "fixture" > "$target/bin/sage.mjs"\n');
-    for (const name of ["gh", "npm"]) await writeFile(join(commands, name), "#!/bin/sh\nexit 0\n");
-    for (const name of ["git", "gh", "npm"]) await chmod(join(commands, name), 0o755);
+    await writeFile(join(commands, "npm"), "#!/bin/sh\nexit 0\n");
+    for (const name of ["git", "npm"]) await chmod(join(commands, name), 0o755);
     await writeFile(join(home, ".zshrc"), "# existing settings\n");
     const env = { ...process.env, HOME: home, PATH: `${commands}:${process.env.PATH}` };
     const script = fileURLToPath(new URL("../scripts/install.sh", import.meta.url));
@@ -45,7 +45,7 @@ test("update pulls the managed checkout and propagates failures without opening 
     const env = { ...process.env, HOME: directory, PATH: `${directory}:${process.env.PATH}`, SAGE_TEST_ARGS: log, DATA_DIR: server, CLIENT_DATA_DIR: join(directory, "client") };
     const installedCli = join(managed, "cli.ts");
     await exec(process.execPath, [installedCli, "update"], { env });
-    assert.match(await readFile(log, "utf8"), /git .*pull --ff-only\nnpm ci --omit=dev\n/);
+    assert.equal(await readFile(log, "utf8"), "git pull --ff-only\nnpm ci --omit=dev\n");
     await writeFile(log, "");
     await assert.rejects(exec(process.execPath, [installedCli, "update"], { env: { ...env, SAGE_TEST_EXIT: "7" } }), { code: 7 });
     assert.doesNotMatch(await readFile(log, "utf8"), /npm/);

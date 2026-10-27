@@ -42,11 +42,10 @@ Umbrel: Sage gateway → your model server
 
 ## Run the Mac client
 
-Install Node 24.2+, Git, and the GitHub CLI (`gh`). Run `gh auth login` once with
-an account that can access this private repository. Then install from any directory:
+Install Node 24.2+ and Git. Then install from any directory:
 
 ```sh
-gh api -H 'Accept: application/vnd.github.raw+json' 'repos/BrandonLee28/sage-pi/contents/scripts/install.sh?ref=main' | sh
+curl -fsSL https://raw.githubusercontent.com/BrandonLee28/sage-pi/main/scripts/install.sh | sh
 sage
 ```
 

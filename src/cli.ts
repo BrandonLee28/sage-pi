@@ -15,7 +15,7 @@ if (args[0] === "update") {
   if (await realpath(root) !== await realpath(managed).catch(() => ""))
     throw new Error("sage update requires the managed installation in ~/.local/share/sage. Update this checkout with Git instead.");
   for (const [command, commandArgs] of [
-    ["git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "pull", "--ff-only"]],
+    ["git", ["pull", "--ff-only"]],
     ["npm", ["ci", "--omit=dev"]],
   ] as const) {
     const result = spawnSync(command, commandArgs, { cwd: root, stdio: "inherit" });
