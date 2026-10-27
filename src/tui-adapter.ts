@@ -222,7 +222,7 @@ export async function tuiAdapter(assistant: Assistant, config: Config, audio = l
         if (text.trim() === "/new") return controller.newSession();
         if (text.trim() === "/help") {
           notice(
-            "/speak hands-free local voice · /speak off stop microphone · /new new session · /sessions saved chats · /skills, /memory, /schedules (/crons) read-only inspectors · /model · /tasks task graph · /compact [instructions] · Esc stop · Ctrl+O expand tools · Ctrl+C exit.",
+            "/speak hands-free local voice · /speak off stop microphone · /new new session · /sessions saved chats · /skills, /memory, /schedules (/crons) read-only inspectors · /model · /tasks task graph · /compact [instructions] · Esc stop · Ctrl+O expand tools · /exit or Ctrl+C exit.",
           );
           return;
         }

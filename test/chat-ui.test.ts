@@ -73,6 +73,12 @@ test("a reopened long chat keeps Sage's header and styled native editor visible"
       assert.ok(completionScreen.findIndex((line) => line.includes("Inspect available skills")) > completionScreen.findIndex((line) => line.includes("Saved answer line 59")), completionScreen.join("\n"));
       assert.match(completionScreen.slice(-10).join("\n"), /Inspect available skills/);
       editor.handleInput("\x1b");
+      editor.setText("");
+      editor.handleInput("/ex");
+      await new Promise((resolve) => setImmediate(resolve));
+      view.ui.renderNow(true);
+      assert.match(view.ui.getScreenLines().map(stripTerminalSequences).join("\n"), /Exit Sage/);
+      editor.handleInput("\x1b");
       editor.setText("A native editor draft");
       editor.focused = true;
       const rendered = editor.render(80);
@@ -150,5 +156,29 @@ test("a reopened long chat keeps Sage's header and styled native editor visible"
       assert.deepEqual(commands, ["new", "tasks", "skills", "memory", "schedules", "schedules", "new", "tasks", "skills", "memory", "schedules", "schedules"]);
       assert.deepEqual(prompts, ["steer:A plain prompt", "followUp:A plain prompt"]);
     } finally { input("\x04"); await running; uiAdapter.dispose(); }
+
+    for (const send of ["\r", "\x1b\r"]) {
+      const exitAdapter = await tuiAdapter(assistant, config);
+      let terminalStopped = false;
+      const exiting = runDurableTui(exitAdapter.source, {
+        ...exitAdapter.controller,
+        submit: async () => { assert.fail("/exit must not reach the model"); },
+      }, SettingsManager.inMemory(), { ...terminal, stop: () => { terminalStopped = true; } });
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        input("/exit");
+        await new Promise((resolve) => setImmediate(resolve));
+        input(send);
+        await Promise.race([exiting, new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error("/exit did not close the TUI")), 1000);
+        })]);
+        assert.equal(terminalStopped, true);
+      } finally {
+        clearTimeout(timeout);
+        input("\x04");
+        await exiting;
+        await exitAdapter.dispose();
+      }
+    }
   } finally { await assistant.close(); await rm(dataDir, { recursive: true, force: true }); }
 });

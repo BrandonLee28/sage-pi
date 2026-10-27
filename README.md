@@ -164,7 +164,7 @@ Then: “Remind me to stretch in one minute. Save the check-in time.”
 | `/schedules` or `/crons`   | Inspect recurring routines, cron expressions, and one-time reminders    |
 | `/agents`                 | Alias for `/sessions`                                                  |
 | `/help`                   | Show the short help notice                                             |
-| Ctrl+C / Ctrl+D           | Exit; unfinished durable work resumes on next start                    |
+| `/exit` / Ctrl+C / Ctrl+D | Exit; unfinished durable work resumes on next start                    |
 
 Closing the TUI disconnects the client. The gateway, text work, Telegram, and
 schedules keep running. Only `sage gateway` starts the persistent agent process.

@@ -27,6 +27,8 @@ Local adaptations:
   Alt+Enter share command dispatch. Keep the task graph opt-in through `/tasks`
   and label sleeping routines as waiting for their next scheduled run.
   Editor, message/tool rendering, and execution stay upstream.
+- Add `/exit` to completion and route it through the same UI exit handler as
+  Ctrl+C/Ctrl+D, so application shutdown and voice cleanup remain shared.
 - Add `/new` and a **New session** row to the session picker (`/sessions`, with
   `/agents` retained). The app adapter creates native Pi conversations and stores
   their local navigation index/selection in a native session document.

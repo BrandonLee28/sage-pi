@@ -133,6 +133,7 @@ export class DurableTui {
 			{ name: "compact", description: "Compact conversation context" },
 			{ name: "tasks", description: "Show or hide background task details" },
 			{ name: "help", description: "Show shortcuts" },
+			{ name: "exit", description: "Exit Sage; saved work resumes next start" },
 		], cwd));
 		this.#editor.onSubmit = handlers.submit;
 		this.#editor.onEscape = handlers.abort;
@@ -597,6 +598,7 @@ export async function runDurableTui(
 	const submit = (text: string, mode: "steer" | "followUp") => {
 		const trimmed = text.trim();
 		if (!trimmed) return;
+		if (trimmed === "/exit") return exit();
 		if (trimmed === "/model") return selectModel();
 		if (trimmed === "/skills" || trimmed === "/memory") return void inspect(trimmed === "/skills" ? "skills" : "memory");
 		if (trimmed === "/schedules" || trimmed === "/crons") return void inspect("schedules");
