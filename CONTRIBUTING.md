@@ -79,7 +79,7 @@ Docker daemon. Disclose any relevant validation you could not perform.
 
 The initial import bootstraps main. Every subsequent change, including docs and CI,
 must use a PR. Repository settings allow squash merging only and delete merged
-branches. Keep the repository private. Never commit credentials or runtime state;
+branches. Never commit credentials or runtime state;
 only instruction templates and placeholder configuration belong in Git.
 
 The intended main protection requires a PR, the `check-and-test` CI job on an
@@ -89,10 +89,10 @@ zero because the owner and agents use the same GitHub identity; requiring the PR
 author to approve their own PR would block this solo workflow. Brandon's review
 and merge remain the handoff policy in AGENTS.md.
 
-Private-repository branch protections require a supported GitHub plan. Verify the
-actual status under [branch settings](https://github.com/BrandonLee28/sage-pi/settings/branches);
-if GitHub rejects protection, these rules remain agent instructions rather than a
-server-enforced gate. Never make the repository public to enable protection.
+Verify the actual protection status under
+[branch settings](https://github.com/BrandonLee28/sage-pi/settings/branches); if
+GitHub rejects protection, these rules remain agent instructions rather than a
+server-enforced gate.
 
 GitHub ownership and agent instructions cannot distinguish Brandon from an agent
 using his credentials. They are not separate permission identities.

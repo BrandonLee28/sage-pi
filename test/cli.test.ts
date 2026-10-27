@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile, mkdir, access } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir, access, chmod, readlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -11,6 +11,50 @@ import { readSettings, saveSettings } from "../src/settings.ts";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+
+test("installer links Sage on PATH and refuses to overwrite an installation", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sage-install-"));
+  const commands = join(home, "commands");
+  try {
+    await mkdir(commands);
+    await writeFile(join(commands, "git"), '#!/bin/sh\nfor arg do target="$arg"; done\nmkdir -p "$target/bin"\nprintf "fixture" > "$target/bin/sage.mjs"\n');
+    await writeFile(join(commands, "npm"), "#!/bin/sh\nexit 0\n");
+    for (const name of ["git", "npm"]) await chmod(join(commands, name), 0o755);
+    await writeFile(join(home, ".zshrc"), "# existing settings\n");
+    const env = { ...process.env, HOME: home, PATH: `${commands}:${process.env.PATH}` };
+    const script = fileURLToPath(new URL("../scripts/install.sh", import.meta.url));
+    await exec("sh", [script], { env });
+    assert.equal(await readlink(join(home, ".local/bin/sage")), join(home, ".local/share/sage/bin/sage.mjs"));
+    assert.match(await readFile(join(home, ".zshrc"), "utf8"), /# existing settings[\s\S]*export PATH="\$HOME\/\.local\/bin:\$PATH"/);
+    await assert.rejects(exec("sh", [script], { env }), /already exists/);
+    assert.equal(await readFile(join(home, ".local/share/sage/bin/sage.mjs"), "utf8"), "fixture");
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test("update pulls the managed checkout and propagates failures without opening storage", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sage-update-"));
+  const log = join(directory, "args"), server = join(directory, "server");
+  const managed = join(directory, ".local", "share", "sage", "src");
+  try {
+    await mkdir(managed, { recursive: true });
+    for (const name of ["cli.ts", "settings.ts"]) await writeFile(join(managed, name), await readFile(new URL(`../src/${name}`, import.meta.url)));
+    for (const command of ["git", "npm"]) {
+      await writeFile(join(directory, command), `#!/bin/sh\nprintf '${command} %s\\n' "$*" >> "$SAGE_TEST_ARGS"\nexit "\${SAGE_TEST_EXIT:-0}"\n`);
+      await chmod(join(directory, command), 0o755);
+    }
+    const env = { ...process.env, HOME: directory, PATH: `${directory}:${process.env.PATH}`, SAGE_TEST_ARGS: log, DATA_DIR: server, CLIENT_DATA_DIR: join(directory, "client") };
+    const installedCli = join(managed, "cli.ts");
+    await exec(process.execPath, [installedCli, "update"], { env });
+    assert.equal(await readFile(log, "utf8"), "git pull --ff-only\nnpm ci --omit=dev\n");
+    await writeFile(log, "");
+    await assert.rejects(exec(process.execPath, [installedCli, "update"], { env: { ...env, SAGE_TEST_EXIT: "7" } }), { code: 7 });
+    assert.doesNotMatch(await readFile(log, "utf8"), /npm/);
+    await assert.rejects(exec(process.execPath, [cli, "update"], { env }), /managed installation/);
+    await assert.rejects(exec(process.execPath, [installedCli, "update", "extra"], { env }), /Usage: sage update/);
+    await assert.rejects(access(server), { code: "ENOENT" });
+    await assert.rejects(access(env.CLIENT_DATA_DIR), { code: "ENOENT" });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 test("Mac voice model setup persists beside the connection without opening server storage", async () => {
   const directory = await mkdtemp(join(tmpdir(), "sage-client-voice-"));
